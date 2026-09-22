@@ -58,6 +58,7 @@ public class SessionTokenService {
         refreshToken.setExpiresAt(now.plus(rememberMe
                 ? properties.getSecurity().getJwt().getRememberMeRefreshTokenTtl()
                 : properties.getSecurity().getJwt().getRefreshTokenTtl()));
+        refreshToken.setRememberMe(rememberMe);
         RefreshToken saved = refreshTokenRepository.save(refreshToken);
         List<String> roles = rolesOf(user);
         String accessToken = jwtService.createAccessToken(user.getUuid(), saved.getId(), roles);
@@ -69,7 +70,9 @@ public class SessionTokenService {
         RefreshToken existing = requireActive(rawRefreshToken);
         existing.setRevokedAt(Instant.now());
         refreshTokenRepository.save(existing);
-        return issueTokens(existing.getUser(), existing.getDeviceName(), existing.getPlatform(), false);
+        // Carry the original session's remember-me choice forward, or a refresh silently shortens a 90-day
+        // remember-me session to 30 days the first time the client renews its access token.
+        return issueTokens(existing.getUser(), existing.getDeviceName(), existing.getPlatform(), existing.isRememberMe());
     }
 
     @Transactional

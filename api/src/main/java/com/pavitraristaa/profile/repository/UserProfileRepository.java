@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface UserProfileRepository extends JpaRepository<UserProfile, Long> {
 
+    // Only one *-to-many path (photos.*) is eager-joined here. UserProfile also has languages/interests/hobbies,
+    // each mapped as a plain List (an unordered Hibernate "bag"); joining more than one bag association in the
+    // same query throws MultipleBagFetchException, so those three stay lazy rather than risk that at runtime.
     @EntityGraph(attributePaths = {
             "user",
             "country",
@@ -27,7 +30,9 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
             "lifestyle.drinking",
             "lifestyle.exerciseFrequency",
             "spiritualProfile",
-            "verification"
+            "verification",
+            "photos",
+            "photos.mediaFile"
     })
     Optional<UserProfile> findByUserAndDeletedFalse(UserAccount user);
 
@@ -49,7 +54,9 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
             "lifestyle.drinking",
             "lifestyle.exerciseFrequency",
             "spiritualProfile",
-            "verification"
+            "verification",
+            "photos",
+            "photos.mediaFile"
     })
     Optional<UserProfile> findByUser_UuidAndDeletedFalse(UUID userUuid);
 }

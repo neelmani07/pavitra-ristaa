@@ -58,4 +58,8 @@ public class RefreshToken {
 
     @Column(name = "last_used_at")
     private Instant lastUsedAt;
+
+    /** Whether this session should keep renewing with the long (remember-me) refresh-token TTL. */
+    @Column(name = "remember_me", nullable = false)
+    private boolean rememberMe;
 }
