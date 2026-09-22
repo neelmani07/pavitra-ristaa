@@ -126,7 +126,7 @@ public class ProfileService {
             education.setProfile(profile);
             profile.setEducation(education);
         }
-        education.setEducationLevel(masterValueResolver.optional(request.educationLevelId()));
+        education.setEducationLevel(masterValueResolver.optionalInCategory(request.educationLevelId(), "EDUCATION_LEVEL"));
         education.setInstitutionName(request.institutionName());
         education.setFieldOfStudy(request.fieldOfStudy());
         education.setGraduationYear(request.graduationYear());
@@ -149,11 +149,11 @@ public class ProfileService {
             career.setProfile(profile);
             profile.setCareer(career);
         }
-        career.setOccupation(masterValueResolver.optional(request.occupationId()));
+        career.setOccupation(masterValueResolver.optionalInCategory(request.occupationId(), "OCCUPATION"));
         career.setJobTitle(request.jobTitle());
         career.setCompanyName(request.companyName());
-        career.setIndustry(masterValueResolver.optional(request.industryId()));
-        career.setWorkLocationCity(masterValueResolver.optional(request.workLocationCityId()));
+        career.setIndustry(masterValueResolver.optionalInCategory(request.industryId(), "INDUSTRY"));
+        career.setWorkLocationCity(masterValueResolver.optionalInCategory(request.workLocationCityId(), "CITY"));
         career.setExperienceYears(request.experienceYears());
         if (request.employed() != null) {
             career.setEmployed(request.employed());
@@ -199,10 +199,10 @@ public class ProfileService {
             lifestyle.setProfile(profile);
             profile.setLifestyle(lifestyle);
         }
-        lifestyle.setDiet(masterValueResolver.optional(request.dietId()));
-        lifestyle.setSmoking(masterValueResolver.optional(request.smokingId()));
-        lifestyle.setDrinking(masterValueResolver.optional(request.drinkingId()));
-        lifestyle.setExerciseFrequency(masterValueResolver.optional(request.exerciseFrequencyId()));
+        lifestyle.setDiet(masterValueResolver.optionalInCategory(request.dietId(), "DIET"));
+        lifestyle.setSmoking(masterValueResolver.optionalInCategory(request.smokingId(), "SMOKING"));
+        lifestyle.setDrinking(masterValueResolver.optionalInCategory(request.drinkingId(), "DRINKING"));
+        lifestyle.setExerciseFrequency(masterValueResolver.optionalInCategory(request.exerciseFrequencyId(), "EXERCISE_FREQUENCY"));
         lifestyle.setSleepPattern(request.sleepPattern());
         lifestyle.setPets(request.pets());
         refreshCompletion(profile);
@@ -249,7 +249,7 @@ public class ProfileService {
             }
             requested.put(item.languageId(), item);
         }
-        List<MasterValue> desired = masterValueResolver.requireAll(requested.keySet());
+        List<MasterValue> desired = masterValueResolver.requireAllInCategory(requested.keySet(), "LANGUAGE");
         // Update in place: clear-and-re-add would insert before deleting and violate uq_profile_language.
         syncByMasterValue(profile.getLanguages(), desired, ProfileLanguage::getLanguage, value -> {
             ProfileLanguage language = new ProfileLanguage();
@@ -274,7 +274,7 @@ public class ProfileService {
     @Transactional
     public List<Map<String, Object>> replaceInterests(AuthenticatedUser principal, ReplaceInterestsRequest request) {
         UserProfile profile = requireMine(authService.requireUsable(principal));
-        syncByMasterValue(profile.getInterests(), masterValueResolver.requireAll(request.interestIds()),
+        syncByMasterValue(profile.getInterests(), masterValueResolver.requireAllInCategory(request.interestIds(), "INTEREST"),
                 ProfileInterest::getInterest, value -> {
                     ProfileInterest interest = new ProfileInterest();
                     interest.setProfile(profile);
@@ -293,7 +293,7 @@ public class ProfileService {
     @Transactional
     public List<Map<String, Object>> replaceHobbies(AuthenticatedUser principal, ReplaceHobbiesRequest request) {
         UserProfile profile = requireMine(authService.requireUsable(principal));
-        syncByMasterValue(profile.getHobbies(), masterValueResolver.requireAll(request.hobbyIds()),
+        syncByMasterValue(profile.getHobbies(), masterValueResolver.requireAllInCategory(request.hobbyIds(), "HOBBY"),
                 ProfileHobby::getHobby, value -> {
                     ProfileHobby hobby = new ProfileHobby();
                     hobby.setProfile(profile);
@@ -467,13 +467,13 @@ public class ProfileService {
             profile.setAboutMe(blank(request.aboutMe()) ? null : request.aboutMe());
         }
         if (request.countryId() != null) {
-            profile.setCountry(masterValueResolver.require(request.countryId()));
+            profile.setCountry(masterValueResolver.requireInCategory(request.countryId(), "COUNTRY"));
         }
         if (request.stateId() != null) {
-            profile.setState(masterValueResolver.require(request.stateId()));
+            profile.setState(masterValueResolver.requireInCategory(request.stateId(), "STATE"));
         }
         if (request.cityId() != null) {
-            profile.setCity(masterValueResolver.require(request.cityId()));
+            profile.setCity(masterValueResolver.requireInCategory(request.cityId(), "CITY"));
         }
         profile.setUpdatedAt(Instant.now());
     }

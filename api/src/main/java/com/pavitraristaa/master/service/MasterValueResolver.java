@@ -49,4 +49,39 @@ public class MasterValueResolver {
         }
         return distinct.stream().map(byId::get).toList();
     }
+
+    /**
+     * Same as {@link #optional(Long)}, but also rejects a value from the wrong category - e.g. an id that
+     * resolves to a religion where an education level is expected. The plain lookups only check {@code active},
+     * and there is no database constraint tying a column like {@code education_level_id} to one category, so
+     * this check is the only thing stopping a value from the wrong list being saved silently.
+     */
+    public MasterValue optionalInCategory(Long id, String categoryCode) {
+        if (id == null) {
+            return null;
+        }
+        return requireInCategory(id, categoryCode);
+    }
+
+    public MasterValue requireInCategory(Long id, String categoryCode) {
+        MasterValue value = require(id);
+        assertCategory(value, categoryCode);
+        return value;
+    }
+
+    public List<MasterValue> requireAllInCategory(Collection<Long> ids, String categoryCode) {
+        List<MasterValue> values = requireAll(ids);
+        values.forEach(value -> assertCategory(value, categoryCode));
+        return values;
+    }
+
+    private void assertCategory(MasterValue value, String categoryCode) {
+        if (!value.getCategory().getCode().equals(categoryCode)) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Master value does not belong to the " + categoryCode + " category",
+                    Map.of("id", value.getId(), "expectedCategory", categoryCode)
+            );
+        }
+    }
 }
