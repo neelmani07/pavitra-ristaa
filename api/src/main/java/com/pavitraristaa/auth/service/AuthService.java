@@ -130,7 +130,9 @@ public class AuthService {
         return authMapper.toRegisterResponse(saved);
     }
 
-    @Transactional
+    // noRollbackFor: otpService.consumeNumericOtp()'s attempt-count increment must persist on a wrong code, or the
+    // max-attempts throttle never trips (each wrong guess would roll its own counter increment back to zero).
+    @Transactional(noRollbackFor = ApiException.class)
     public AccountResponse verifyOtp(VerifyOtpRequest request) {
         OtpPurpose purpose = otpService.parsePurpose(request.purpose());
         String destination = normalizeDestination(request.destination());
@@ -174,7 +176,10 @@ public class AuthService {
         return authMapper.toAccountResponse(user, sessionTokenService.rolesOf(user));
     }
 
-    @Transactional
+    // noRollbackFor: registerFailedLogin()'s attempt count / lockout write must persist even though this method
+    // throws on bad credentials - otherwise the brute-force lockout can never trigger (every failed attempt
+    // rolls its own counter increment back to what it was before).
+    @Transactional(noRollbackFor = ApiException.class)
     public TokenResponse login(LoginRequest request, ClientContext context) {
         String identifier = request.identifier().contains("@")
                 ? ContactNormalizer.normalizeEmail(request.identifier())
@@ -215,7 +220,8 @@ public class AuthService {
         );
     }
 
-    @Transactional
+    // noRollbackFor: same reason as verifyOtp() - the OTP attempt-count increment must survive a thrown ApiException.
+    @Transactional(noRollbackFor = ApiException.class)
     public TokenResponse loginWithOtp(LoginOtpRequest request, ClientContext context) {
         String mobile = ContactNormalizer.normalizeMobile(request.mobile());
         UserAccount user = userAccountRepository.findByMobile(mobile).orElse(null);
@@ -343,11 +349,18 @@ public class AuthService {
     @Transactional
     public void deactivate(AuthenticatedUser principal, String reason) {
         UserAccount user = requireUsable(principal);
-        user.setAccountStatus(AccountStatus.SUSPENDED);
+        user.setAccountStatus(AccountStatus.DEACTIVATED);
         user.setUpdatedAt(Instant.now());
         userAccountRepository.save(user);
+        // Sessions are kept (unlike delete/reset), so the same login can call reactivate without a fresh login,
+        // which is blocked while DEACTIVATED. A refresh token that also expires before reactivation is used
+        // leaves the account reachable only through support - a known limitation, not solved here.
     }
 
+    /**
+     * Self-service only: reverses {@link #deactivate}. An admin-suspended account is not reachable through this
+     * endpoint - {@code SUSPENDED} requires a moderator/admin action once that capability exists.
+     */
     @Transactional
     public void reactivate(AuthenticatedUser principal) {
         UserAccount user = requireUser(principal);
@@ -358,6 +371,9 @@ public class AuthService {
             throw new ApiException(ErrorCode.FORBIDDEN, "Account is blocked");
         }
         if (user.getAccountStatus() == AccountStatus.SUSPENDED) {
+            throw new ApiException(ErrorCode.ACCOUNT_SUSPENDED, "Account is suspended and cannot be self-reactivated");
+        }
+        if (user.getAccountStatus() == AccountStatus.DEACTIVATED) {
             user.setAccountStatus(AccountStatus.ACTIVE);
             user.setUpdatedAt(Instant.now());
             userAccountRepository.save(user);

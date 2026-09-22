@@ -16,6 +16,7 @@ public class AccountStateGuard {
         }
         switch (user.getAccountStatus()) {
             case PENDING_VERIFICATION -> throw new ApiException(ErrorCode.ACCOUNT_NOT_VERIFIED, "Account is not verified");
+            case DEACTIVATED -> throw deactivated();
             case SUSPENDED -> throw new ApiException(ErrorCode.ACCOUNT_SUSPENDED, "Account is suspended");
             case BLOCKED -> throw new ApiException(ErrorCode.FORBIDDEN, "Account is blocked");
             case DELETED -> throw new ApiException(ErrorCode.ACCOUNT_DELETED, "Account has been deleted");
@@ -31,11 +32,18 @@ public class AccountStateGuard {
         if (user.getAccountStatus() == AccountStatus.DELETED || user.isDeleted()) {
             throw new ApiException(ErrorCode.ACCOUNT_DELETED, "Account has been deleted");
         }
+        if (user.getAccountStatus() == AccountStatus.DEACTIVATED) {
+            throw deactivated();
+        }
         if (user.getAccountStatus() == AccountStatus.SUSPENDED) {
             throw new ApiException(ErrorCode.ACCOUNT_SUSPENDED, "Account is suspended");
         }
         if (user.getAccountStatus() == AccountStatus.BLOCKED) {
             throw new ApiException(ErrorCode.FORBIDDEN, "Account is blocked");
         }
+    }
+
+    private ApiException deactivated() {
+        return new ApiException(ErrorCode.FORBIDDEN, "Account is deactivated. Call POST /auth/reactivate to reactivate it.");
     }
 }

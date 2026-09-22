@@ -51,7 +51,10 @@ public class OtpService {
         return token;
     }
 
-    @Transactional
+    // noRollbackFor: incrementAttempts()'s write must persist on a wrong code, or the max-attempts throttle
+    // never trips. Callers that are themselves @Transactional (AuthService.verifyOtp/loginWithOtp) need the
+    // same attribute on their own method too - a nested method's rollback rule doesn't override an outer one.
+    @Transactional(noRollbackFor = ApiException.class)
     public OtpChallenge consumeNumericOtp(String destination, OtpPurpose purpose, String code) {
         OtpChallenge challenge = otpChallengeRepository
                 .findTopByDestinationAndPurposeAndVerifiedAtIsNullOrderByCreatedAtDesc(destination, purpose)

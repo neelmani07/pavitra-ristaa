@@ -25,6 +25,7 @@ import com.pavitraristaa.auth.repository.UserRoleRepository;
 import com.pavitraristaa.auth.security.JwtService;
 import com.pavitraristaa.common.exception.ApiException;
 import com.pavitraristaa.common.exception.ErrorCode;
+import com.pavitraristaa.common.security.AuthenticatedUser;
 import com.pavitraristaa.common.util.ClientContext;
 import com.pavitraristaa.config.PavitraProperties;
 import java.time.Instant;
@@ -183,6 +184,71 @@ class AuthServiceTest {
         verify(userAccountRepository).save(captor.capture());
         assertThat(captor.getValue().getLockedUntil()).isNotNull();
         assertThat(captor.getValue().getFailedLoginAttempts()).isZero();
+    }
+
+    @Test
+    void deactivateSetsDeactivatedStatusNotSuspended() {
+        UserAccount user = activePendingUser();
+        user.setAccountStatus(AccountStatus.ACTIVE);
+        when(userAccountRepository.findByUuid(user.getUuid())).thenReturn(Optional.of(user));
+
+        authService.deactivate(principalFor(user), "taking a break");
+
+        ArgumentCaptor<UserAccount> captor = ArgumentCaptor.forClass(UserAccount.class);
+        verify(userAccountRepository).save(captor.capture());
+        assertThat(captor.getValue().getAccountStatus()).isEqualTo(AccountStatus.DEACTIVATED);
+    }
+
+    @Test
+    void reactivateFlipsDeactivatedAccountBackToActive() {
+        UserAccount user = activePendingUser();
+        user.setAccountStatus(AccountStatus.DEACTIVATED);
+        when(userAccountRepository.findByUuid(user.getUuid())).thenReturn(Optional.of(user));
+
+        authService.reactivate(principalFor(user));
+
+        ArgumentCaptor<UserAccount> captor = ArgumentCaptor.forClass(UserAccount.class);
+        verify(userAccountRepository).save(captor.capture());
+        assertThat(captor.getValue().getAccountStatus()).isEqualTo(AccountStatus.ACTIVE);
+    }
+
+    /**
+     * Regression test for the originally reported bug: deactivate() and reactivate() used to share the SUSPENDED
+     * status, so an admin-suspended account could undo the suspension by calling POST /auth/reactivate.
+     */
+    @Test
+    void reactivateCannotLiftAnAdminSuspension() {
+        UserAccount user = activePendingUser();
+        user.setAccountStatus(AccountStatus.SUSPENDED);
+        when(userAccountRepository.findByUuid(user.getUuid())).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.reactivate(principalFor(user)))
+                .isInstanceOf(ApiException.class)
+                .extracting(exception -> ((ApiException) exception).getErrorCode())
+                .isEqualTo(ErrorCode.ACCOUNT_SUSPENDED);
+        assertThat(user.getAccountStatus()).isEqualTo(AccountStatus.SUSPENDED);
+        verify(userAccountRepository, never()).save(any());
+    }
+
+    @Test
+    void deactivatedAccountCannotLogInWithoutReactivating() {
+        UserAccount user = activePendingUser();
+        user.setAccountStatus(AccountStatus.DEACTIVATED);
+        user.setPasswordHash("hashed");
+        when(userAccountRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("password1", "hashed")).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.login(
+                new LoginRequest("ada@example.com", "password1", false, null, null),
+                new ClientContext("127.0.0.1", "test")
+        ))
+                .isInstanceOf(ApiException.class)
+                .extracting(exception -> ((ApiException) exception).getErrorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+    }
+
+    private AuthenticatedUser principalFor(UserAccount user) {
+        return new AuthenticatedUser(user.getId(), user.getUuid(), List.of("USER"), 1L);
     }
 
     private UserAccount activePendingUser() {
