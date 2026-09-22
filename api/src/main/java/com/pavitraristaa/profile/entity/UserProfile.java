@@ -123,6 +123,12 @@ public class UserProfile {
     @OneToMany(mappedBy = "profile", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ProfileHobby> hobbies = new ArrayList<>();
 
+    // Batch-loaded (not eager-joined) for any query that also paginates or fetch-joins another *-to-many:
+    // combining an eager collection fetch with LIMIT/OFFSET forces Hibernate into a derived-table pagination
+    // strategy that generates invalid SQL under globally_quoted_identifiers (see DiscoveryProfileRepository).
+    // A single profile lookup (findByUserAndDeletedFalse/findByUser_UuidAndDeletedFalse) still eager-joins
+    // "photos" directly via its own @EntityGraph, since there's no pagination there to conflict with it.
     @OneToMany(mappedBy = "profile", cascade = CascadeType.ALL, orphanRemoval = true)
+    @org.hibernate.annotations.BatchSize(size = 20)
     private List<ProfilePhoto> photos = new ArrayList<>();
 }
