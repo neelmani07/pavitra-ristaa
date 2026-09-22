@@ -5,6 +5,8 @@ import com.pavitraristaa.media.service.MediaUrlResolver;
 import com.pavitraristaa.profile.dto.ProfilePhotoResponse;
 import com.pavitraristaa.profile.dto.ProfileResponse;
 import com.pavitraristaa.profile.dto.SpiritualProfileResponse;
+import com.pavitraristaa.profile.entity.PhotoApprovalStatus;
+import com.pavitraristaa.profile.entity.PhotoVisibility;
 import com.pavitraristaa.profile.entity.ProfileCareer;
 import com.pavitraristaa.profile.entity.ProfileEducation;
 import com.pavitraristaa.profile.entity.ProfileFamily;
@@ -34,10 +36,10 @@ public class ProfileMapper {
         this.mediaUrlResolver = mediaUrlResolver;
     }
 
-    public ProfileResponse toResponse(UserProfile profile, List<String> relationshipModes, boolean includePrivatePhotos) {
+    public ProfileResponse toResponse(UserProfile profile, List<String> relationshipModes, boolean owner) {
         List<ProfilePhotoResponse> photos = profile.getPhotos().stream()
                 .sorted(Comparator.comparingInt(ProfilePhoto::getDisplayOrder))
-                .filter(photo -> includePrivatePhotos || photo.getVisibility() != com.pavitraristaa.profile.entity.PhotoVisibility.PRIVATE)
+                .filter(photo -> owner || isPubliclyVisible(photo))
                 .map(this::toPhoto)
                 .toList();
         return new ProfileResponse(
@@ -66,6 +68,15 @@ public class ProfileMapper {
                 photos,
                 verification(profile.getVerification())
         );
+    }
+
+    /**
+     * A photo is shown to someone other than its owner only once a moderator has approved it, and never if the
+     * owner marked it PRIVATE. A photo awaiting review or one a moderator rejected must never be public.
+     */
+    private boolean isPubliclyVisible(ProfilePhoto photo) {
+        return photo.getVisibility() != PhotoVisibility.PRIVATE
+                && photo.getApprovalStatus() == PhotoApprovalStatus.APPROVED;
     }
 
     public ProfilePhotoResponse toPhoto(ProfilePhoto photo) {
