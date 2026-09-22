@@ -1,0 +1,57 @@
+# Local infrastructure: PostgreSQL and S3-compatible object storage (MinIO).
+# Not for production. Secrets come from a git-ignored .env file:  ./scripts/setup-local.sh  creates it with random
+# values (see .env.example for what it contains).
+#
+#   docker compose up -d        start
+#   docker compose down         stop (data is kept)
+#   docker compose down -v      stop and delete all data
+name: pavitra-ristaa
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: pavitra_ristaa
+      POSTGRES_USER: ${DB_USERNAME:-pavitra_ristaa}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Run ./scripts/setup-local.sh to create .env}
+    ports:
+      # 5433 on the host so it does not clash with a PostgreSQL already running on 5432
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    # Pinned: MinIO no longer publishes a moving community "latest". The ".hotfix" builds of this release are
+    # amd64-only, so use the plain tag to keep Apple Silicon working.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MEDIA_ACCESS_KEY:?Run ./scripts/setup-local.sh to create .env}
+      MINIO_ROOT_PASSWORD: ${MEDIA_SECRET_KEY:?Run ./scripts/setup-local.sh to create .env}
+      MEDIA_BUCKET: ${MEDIA_BUCKET:-pavitra-media}
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API (the app's MEDIA_ENDPOINT)
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"   # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # Healthy only when the server answers AND the private media bucket exists. Creating the bucket here (idempotent)
+      # avoids a separate one-shot container, whose exit would make `docker compose up --wait` return a failure code.
+      test:
+        - CMD-SHELL
+        - >
+          mc ready local &&
+          mc alias set health http://localhost:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null &&
+          mc mb --ignore-existing "health/$$MEDIA_BUCKET" >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  minio-data:

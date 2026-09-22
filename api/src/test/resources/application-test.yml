@@ -1,0 +1,15 @@
+spring:
+  flyway:
+    enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+
+pavitra:
+  security:
+    jwt:
+      secret: test-jwt-secret-key-which-is-32-chars
+      issuer: pavitra-ristaa
+      access-token-ttl: PT15M
+      refresh-token-ttl: P30D

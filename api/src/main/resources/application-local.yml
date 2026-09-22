@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/pavitra_ristaa}
+    username: ${DB_USERNAME:pavitra_ristaa}
+    password: ${DB_PASSWORD:}
+
+pavitra:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:change-me-local-dev-jwt-secret-key-32}
+  media:
+    # Local MinIO by default; MEDIA_ACCESS_KEY / MEDIA_SECRET_KEY must come from the environment.
+    provider: ${MEDIA_PROVIDER:MINIO}
+    bucket: ${MEDIA_BUCKET:pavitra-media}
+    endpoint: ${MEDIA_ENDPOINT:http://localhost:9000}
+    path-style-access: ${MEDIA_PATH_STYLE:true}
+
+logging:
+  level:
+    com.pavitraristaa: DEBUG
+    org.springframework.security: INFO
