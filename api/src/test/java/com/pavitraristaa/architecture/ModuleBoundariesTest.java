@@ -26,13 +26,17 @@ class ModuleBoundariesTest {
     private static final String BASE = "com.pavitraristaa";
 
     /** Feature -> the other features it may depend on. Everything else is forbidden. */
-    private static final Map<String, Set<String>> ALLOWED_DEPENDENCIES = Map.of(
-            "auth", Set.of(),
-            "master", Set.of(),
-            "relationship", Set.of("auth"),
-            "media", Set.of("auth"),
-            "profile", Set.of("auth", "master", "media", "relationship"),
-            "preference", Set.of("auth", "master", "profile")
+    private static final Map<String, Set<String>> ALLOWED_DEPENDENCIES = Map.ofEntries(
+            Map.entry("auth", Set.of()),
+            Map.entry("master", Set.of()),
+            Map.entry("relationship", Set.of("auth")),
+            Map.entry("media", Set.of("auth")),
+            Map.entry("profile", Set.of("auth", "master", "media", "relationship")),
+            Map.entry("preference", Set.of("auth", "master", "profile")),
+            Map.entry("trust", Set.of("auth")),
+            Map.entry("favorites", Set.of("auth", "profile", "trust")),
+            Map.entry("discovery", Set.of("auth", "profile", "relationship", "trust")),
+            Map.entry("connections", Set.of("auth", "master", "preference", "profile", "relationship", "trust"))
     );
 
     private static final JavaClasses CLASSES = new ClassFileImporter()
