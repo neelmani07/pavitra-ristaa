@@ -94,9 +94,9 @@ Swagger UI is at `http://localhost:8080/swagger-ui.html`.
 |---|---|---|
 | `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | both | Required when `SPRING_PROFILES_ACTIVE` is not `local` |
 | `SPRING_PROFILES_ACTIVE` | both | `local` (default), `dev`, `prod` |
-| `JWT_SECRET` | api | Required in `dev` and `prod`; `prod` refuses to start unless it is at least 32 characters |
+| `JWT_SECRET` | api | Required in every profile, at least 32 characters; the app refuses to start otherwise. `./scripts/setup-local.sh` generates one |
 | `MEDIA_BUCKET`, `MEDIA_ENDPOINT`, `MEDIA_ACCESS_KEY`, `MEDIA_SECRET_KEY`, `MEDIA_REGION`, `MEDIA_PATH_STYLE`, `MEDIA_PROVIDER` | api | S3 / MinIO. `local` defaults to MinIO at `localhost:9000`, bucket `pavitra-media` |
-| `GOOGLE_CLIENT_ID`, `APPLE_CLIENT_ID` | api | Social login |
+| `GOOGLE_CLIENT_ID`, `APPLE_CLIENT_ID` | api | Social login. The app refuses Google/Apple sign-in requests (`VALIDATION_ERROR`) while the matching variable is unset |
 
 ## Deployment order
 

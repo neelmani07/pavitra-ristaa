@@ -7,7 +7,9 @@ spring:
 pavitra:
   security:
     jwt:
-      secret: ${JWT_SECRET:change-me-local-dev-jwt-secret-key-32}
+      # No placeholder fallback: JwtSecretValidator now rejects a short/blank/placeholder secret in every
+      # profile. Run ./scripts/setup-local.sh once to generate a real one into .env.
+      secret: ${JWT_SECRET}
   media:
     # Local MinIO by default; MEDIA_ACCESS_KEY / MEDIA_SECRET_KEY must come from the environment.
     provider: ${MEDIA_PROVIDER:MINIO}

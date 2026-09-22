@@ -43,6 +43,12 @@ public class GoogleAppleIdentityVerifier implements SocialIdentityVerifier {
 
     @Override
     public SocialIdentity verifyGoogle(String idToken) {
+        // Fail closed, like verifyApple(): without an expected audience, any valid Google id_token minted for a
+        // different app would otherwise pass (token-confusion replay) on this public, unauthenticated endpoint.
+        String expectedAudience = properties.getAuth().getOauth().getGoogleClientId();
+        if (expectedAudience == null || expectedAudience.isBlank()) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "Google Sign In is not configured");
+        }
         JsonNode payload;
         try {
             payload = restClient.get()
@@ -56,8 +62,7 @@ public class GoogleAppleIdentityVerifier implements SocialIdentityVerifier {
             throw new ApiException(ErrorCode.INVALID_CREDENTIALS, "Google identity token is invalid");
         }
         String audience = payload.path("aud").asText("");
-        String expectedAudience = properties.getAuth().getOauth().getGoogleClientId();
-        if (expectedAudience != null && !expectedAudience.isBlank() && !expectedAudience.equals(audience)) {
+        if (!expectedAudience.equals(audience)) {
             throw new ApiException(ErrorCode.INVALID_CREDENTIALS, "Google identity token audience is invalid");
         }
         String email = blankToNull(payload.path("email").asText(null));
