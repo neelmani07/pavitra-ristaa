@@ -22,6 +22,11 @@ import com.pavitraristaa.master.dto.MasterValueResponse;
 import com.pavitraristaa.master.service.MasterDataService;
 import com.pavitraristaa.media.dto.CompleteUploadRequest;
 import com.pavitraristaa.media.service.MediaService;
+import com.pavitraristaa.messaging.dto.ConversationResponse;
+import com.pavitraristaa.messaging.dto.MessageResponse;
+import com.pavitraristaa.messaging.dto.ReactionRequest;
+import com.pavitraristaa.messaging.service.ConversationService;
+import com.pavitraristaa.messaging.service.MessageService;
 import com.pavitraristaa.preference.dto.PartnerPreferenceRequest;
 import com.pavitraristaa.preference.dto.PartnerPreferenceResponse;
 import com.pavitraristaa.preference.dto.PreferenceValueRequest;
@@ -62,6 +67,8 @@ abstract class AbstractPersistenceTests {
     @Autowired private DiscoveryService discoveryService;
     @Autowired private InterestService interestService;
     @Autowired private MatchService matchService;
+    @Autowired private ConversationService conversationService;
+    @Autowired private MessageService messageService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -568,5 +575,134 @@ abstract class AbstractPersistenceTests {
         assertThat(compatibility.matchId()).isEqualTo(matchId);
         assertThat(compatibility.score()).isEqualTo(50);
         assertThat(compatibility.factors()).isEmpty();
+    }
+
+    // --- Messaging: a conversation only ever comes to exist via the match-event listeners in ConversationService,
+    // since sending a message is WebSocket-only and not yet implemented - so these insert message rows directly. ---
+
+    @Test
+    void acceptingAnInterestAutoCreatesAConversationWithBothParticipants() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, sent.id());
+
+        List<ConversationResponse> aConversations = conversationService.listMine(a, null, null);
+        List<ConversationResponse> bConversations = conversationService.listMine(b, null, null);
+
+        assertThat(aConversations).hasSize(1);
+        assertThat(aConversations.get(0).status()).isEqualTo("ACTIVE");
+        assertThat(aConversations.get(0).participants()).extracting(UserSummaryResponse::id)
+                .containsExactlyInAnyOrder(a.uuid(), b.uuid());
+        assertThat(bConversations).extracting(ConversationResponse::id)
+                .containsExactly(aConversations.get(0).id());
+    }
+
+    @Test
+    void unmatchingClosesTheConversationAndRematchingReopensTheSameOne() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse first = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, first.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+        UUID matchId = lookupMatchId(a);
+
+        matchService.unmatch(a, matchId);
+        assertThat(conversationService.getOne(a, conversationId).status()).isEqualTo("CLOSED");
+
+        InterestResponse second = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, second.id());
+
+        ConversationResponse reopened = conversationService.getOne(a, conversationId);
+        assertThat(reopened.status()).isEqualTo("ACTIVE");
+        assertThat(conversationService.listMine(a, null, null)).extracting(ConversationResponse::id)
+                .containsExactly(conversationId);
+    }
+
+    @Test
+    void nonParticipantCannotAccessAConversationOrItsMessages() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        AuthenticatedUser stranger = discoverableUser("MALE", 29, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, sent.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+        UUID messageId = insertMessage(conversationId, a, "Hello!");
+
+        assertThatThrownBy(() -> conversationService.getOne(stranger, conversationId))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.CONVERSATION_NOT_FOUND));
+        assertThatThrownBy(() -> messageService.getOne(stranger, conversationId, messageId))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.CONVERSATION_NOT_FOUND));
+        assertThatThrownBy(() -> messageService.history(stranger, conversationId, null, null, null))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.CONVERSATION_NOT_FOUND));
+    }
+
+    @Test
+    void messageHistoryReadAndReactionWorkAndDeleteIsSenderOnly() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, sent.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+        UUID messageId = insertMessage(conversationId, a, "Hello Bob!");
+
+        List<MessageResponse> history = messageService.history(b, conversationId, null, null, null);
+        assertThat(history).extracting(MessageResponse::id).containsExactly(messageId);
+        assertThat(history.get(0).content()).isEqualTo("Hello Bob!");
+        assertThat(history.get(0).senderUserId()).isEqualTo(a.uuid());
+
+        messageService.markRead(b, conversationId, messageId);
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from message_read mr join \"user\" u on u.id = mr.user_id "
+                        + "where mr.read_at is not null and u.uuid = ?", Integer.class, b.uuid()))
+                .isEqualTo(1);
+
+        messageService.react(b, conversationId, messageId, new ReactionRequest("heart"));
+        assertThat(jdbcTemplate.queryForObject(
+                "select mr.reaction_code from message_reaction mr join message m on m.id = mr.message_id "
+                        + "where m.uuid = ?", String.class, messageId))
+                .isEqualTo("HEART");
+
+        assertThatThrownBy(() -> messageService.delete(b, conversationId, messageId))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+
+        messageService.delete(a, conversationId, messageId);
+        MessageResponse deleted = messageService.getOne(a, conversationId, messageId);
+        assertThat(deleted.status()).isEqualTo("DELETED");
+        assertThat(deleted.content()).isNull();
+    }
+
+    @Test
+    void blockingFromChatClosesTheConversationAndBlocksTheOtherUser() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, sent.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+
+        conversationService.blockParticipant(a, conversationId);
+
+        assertThat(conversationService.getOne(a, conversationId).status()).isEqualTo("CLOSED");
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from block bl join \"user\" blocker on blocker.id = bl.blocker_user_id "
+                        + "join \"user\" blocked on blocked.id = bl.blocked_user_id "
+                        + "where blocker.uuid = ? and blocked.uuid = ?", Integer.class, a.uuid(), b.uuid()))
+                .isEqualTo(1);
+        // Already blocked by discovery's own check (tested separately) - sending a fresh interest is refused too.
+        assertThatThrownBy(() -> interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.USER_BLOCKED));
+    }
+
+    private UUID insertMessage(UUID conversationId, AuthenticatedUser sender, String content) {
+        UUID messageUuid = UUID.randomUUID();
+        jdbcTemplate.update(
+                "insert into message (uuid, conversation_id, sender_user_id, message_type, content, status, sent_at) "
+                        + "values (?, (select id from conversation where uuid = ?), "
+                        + "(select id from \"user\" where uuid = ?), 'TEXT', ?, 'SENT', now())",
+                messageUuid, conversationId, sender.uuid(), content);
+        return messageUuid;
     }
 }
