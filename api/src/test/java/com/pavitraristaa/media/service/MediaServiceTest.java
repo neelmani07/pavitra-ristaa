@@ -19,6 +19,7 @@ import com.pavitraristaa.media.dto.CompleteUploadRequest;
 import com.pavitraristaa.media.dto.CreateUploadUrlRequest;
 import com.pavitraristaa.media.dto.MediaFileResponse;
 import com.pavitraristaa.media.dto.UploadUrlResponse;
+import com.pavitraristaa.media.mapper.MediaFileMapper;
 import com.pavitraristaa.media.entity.MediaFile;
 import com.pavitraristaa.media.entity.MediaStatus;
 import com.pavitraristaa.media.entity.StorageProvider;
@@ -46,7 +47,7 @@ class MediaServiceTest {
     @Mock private MediaFileRepository mediaFileRepository;
     @Mock private MediaUsageChecker usageChecker;
     @Mock private ObjectStorage objectStorage;
-    @Mock private MediaUrlResolver mediaUrlResolver;
+    @Mock private MediaFileMapper mediaFileMapper;
 
     private PavitraProperties properties;
     private MediaService mediaService;
@@ -59,7 +60,7 @@ class MediaServiceTest {
         properties.getMedia().setBucket("pavitra-media");
         properties.getMedia().setProvider(PavitraProperties.Media.Provider.MINIO);
         mediaService = new MediaService(
-                authService, mediaFileRepository, List.of(usageChecker), objectStorage, mediaUrlResolver, properties);
+                authService, mediaFileRepository, List.of(usageChecker), objectStorage, mediaFileMapper, properties);
         user = new UserAccount();
         user.setId(7L);
         user.setUuid(UUID.randomUUID());
@@ -122,7 +123,8 @@ class MediaServiceTest {
         when(objectStorage.find(media.getBucket(), media.getObjectKey()))
                 .thenReturn(Optional.of(new StoredObject(2048, "image/jpeg")));
         when(mediaFileRepository.save(media)).thenReturn(media);
-        when(mediaUrlResolver.urlFor(media)).thenReturn("https://storage/get");
+        when(mediaFileMapper.toResponse(media)).thenReturn(
+                new MediaFileResponse(media.getUuid(), null, "image/jpeg", 2048, "https://storage/get", "ACTIVE"));
 
         MediaFileResponse response = mediaService.complete(
                 principal, new CompleteUploadRequest(media.getUuid(), " abc123 "));
@@ -139,6 +141,8 @@ class MediaServiceTest {
         media.setStatus(MediaStatus.ACTIVE);
         when(mediaFileRepository.findByUuidAndOwnerAndStatusNot(media.getUuid(), user, MediaStatus.DELETED))
                 .thenReturn(Optional.of(media));
+        when(mediaFileMapper.toResponse(media)).thenReturn(
+                new MediaFileResponse(media.getUuid(), null, "image/jpeg", 2048, null, "ACTIVE"));
 
         MediaFileResponse response = mediaService.complete(principal, new CompleteUploadRequest(media.getUuid(), null));
 

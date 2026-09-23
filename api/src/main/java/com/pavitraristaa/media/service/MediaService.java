@@ -12,6 +12,7 @@ import com.pavitraristaa.media.dto.MediaFileResponse;
 import com.pavitraristaa.media.dto.UploadUrlResponse;
 import com.pavitraristaa.media.entity.MediaFile;
 import com.pavitraristaa.media.entity.MediaStatus;
+import com.pavitraristaa.media.mapper.MediaFileMapper;
 import com.pavitraristaa.media.entity.StorageProvider;
 import com.pavitraristaa.media.repository.MediaFileRepository;
 import com.pavitraristaa.media.storage.ObjectStorage.PresignedUpload;
@@ -45,7 +46,7 @@ public class MediaService {
     private final MediaFileRepository mediaFileRepository;
     private final List<MediaUsageChecker> usageCheckers;
     private final ObjectStorage objectStorage;
-    private final MediaUrlResolver mediaUrlResolver;
+    private final MediaFileMapper mediaFileMapper;
     private final PavitraProperties.Media config;
 
     public MediaService(
@@ -53,14 +54,14 @@ public class MediaService {
             MediaFileRepository mediaFileRepository,
             List<MediaUsageChecker> usageCheckers,
             ObjectStorage objectStorage,
-            MediaUrlResolver mediaUrlResolver,
+            MediaFileMapper mediaFileMapper,
             PavitraProperties properties
     ) {
         this.authService = authService;
         this.mediaFileRepository = mediaFileRepository;
         this.usageCheckers = usageCheckers;
         this.objectStorage = objectStorage;
-        this.mediaUrlResolver = mediaUrlResolver;
+        this.mediaFileMapper = mediaFileMapper;
         this.config = properties.getMedia();
     }
 
@@ -169,14 +170,7 @@ public class MediaService {
     }
 
     private MediaFileResponse toResponse(MediaFile media) {
-        return new MediaFileResponse(
-                media.getUuid(),
-                media.getOriginalFilename(),
-                media.getMimeType(),
-                media.getFileSizeBytes(),
-                mediaUrlResolver.urlFor(media),
-                media.getStatus().name()
-        );
+        return mediaFileMapper.toResponse(media);
     }
 
     private void deleteObjectQuietly(MediaFile media) {
