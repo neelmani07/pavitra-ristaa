@@ -6,9 +6,11 @@ import com.pavitraristaa.media.dto.MediaFileResponse;
 import com.pavitraristaa.messaging.dto.ConversationResponse;
 import com.pavitraristaa.messaging.dto.MessageResponse;
 import com.pavitraristaa.messaging.dto.ReactionRequest;
+import com.pavitraristaa.messaging.dto.ReportConversationRequest;
 import com.pavitraristaa.messaging.dto.UpdateConversationRequest;
 import com.pavitraristaa.messaging.service.ConversationService;
 import com.pavitraristaa.messaging.service.MessageService;
+import com.pavitraristaa.trust.dto.ReportResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -132,6 +134,16 @@ public class ConversationController {
     ) {
         return ApiResponse.ok(
                 conversationService.media(currentUserAccessor.requireUser(), conversationId, page, size), "Shared media");
+    }
+
+    @PostMapping("/{conversationId}/report")
+    @Operation(summary = "Report conversation/user from chat")
+    public ApiResponse<ReportResponse> report(
+            @PathVariable UUID conversationId, @Valid @RequestBody ReportConversationRequest request) {
+        return ApiResponse.ok(
+                conversationService.reportParticipant(
+                        currentUserAccessor.requireUser(), conversationId, request.reasonId(), request.details()),
+                "Report submitted");
     }
 
     @PostMapping("/{conversationId}/block")

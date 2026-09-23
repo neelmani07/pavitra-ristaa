@@ -39,6 +39,13 @@ import com.pavitraristaa.profile.dto.UpdatePhotoRequest;
 import com.pavitraristaa.profile.dto.UpdateProfileRequest;
 import com.pavitraristaa.profile.dto.UserSummaryResponse;
 import com.pavitraristaa.profile.service.ProfileService;
+import com.pavitraristaa.trust.dto.CreateReportRequest;
+import com.pavitraristaa.trust.dto.ReportResponse;
+import com.pavitraristaa.trust.dto.SubmitVerificationRequest;
+import com.pavitraristaa.trust.dto.VerificationStatusResponse;
+import com.pavitraristaa.trust.service.BlockService;
+import com.pavitraristaa.trust.service.ReportService;
+import com.pavitraristaa.trust.service.VerificationService;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -69,6 +76,9 @@ abstract class AbstractPersistenceTests {
     @Autowired private MatchService matchService;
     @Autowired private ConversationService conversationService;
     @Autowired private MessageService messageService;
+    @Autowired private BlockService blockService;
+    @Autowired private ReportService reportService;
+    @Autowired private VerificationService verificationService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -704,5 +714,104 @@ abstract class AbstractPersistenceTests {
                         + "(select id from \"user\" where uuid = ?), 'TEXT', ?, 'SENT', now())",
                 messageUuid, conversationId, sender.uuid(), content);
         return messageUuid;
+    }
+
+    // --- Trust & Safety ---
+
+    @Test
+    void blockingRoundTripsAndIsSelfAndIdempotencySafe() {
+        AuthenticatedUser me = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser other = discoverableUser("MALE", 30, "DATING");
+
+        assertThat(blockService.listMine(me, null, null)).isEmpty();
+        blockService.block(me, other.uuid());
+        blockService.block(me, other.uuid()); // must not fail or duplicate
+        assertThat(blockService.listMine(me, null, null)).extracting(UserSummaryResponse::id).containsExactly(other.uuid());
+
+        blockService.unblock(me, other.uuid());
+        assertThat(blockService.listMine(me, null, null)).isEmpty();
+
+        assertThatThrownBy(() -> blockService.block(me, me.uuid()))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.CANNOT_INTERACT_WITH_SELF));
+    }
+
+    @Test
+    void reportingAUserWorksAndRejectsSelfAndUnknownReason() {
+        AuthenticatedUser me = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser other = discoverableUser("MALE", 30, "DATING");
+        Long reasonId = reportReasonId("SPAM");
+
+        assertThat(reportService.listReasons()).extracting(r -> r.code()).contains("SPAM", "HARASSMENT");
+
+        ReportResponse report = reportService.create(me, new CreateReportRequest(other.uuid(), null, reasonId, "Kept messaging after I said no"));
+        assertThat(report.status()).isEqualTo("OPEN");
+        assertThat(report.reasonCode()).isEqualTo("SPAM");
+        assertThat(report.reportedUserId()).isEqualTo(other.uuid());
+
+        assertThatThrownBy(() -> reportService.create(me, new CreateReportRequest(me.uuid(), null, reasonId, null)))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.CANNOT_INTERACT_WITH_SELF));
+        assertThatThrownBy(() -> reportService.create(me, new CreateReportRequest(other.uuid(), null, 999999L, null)))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void reportingFromAConversationReportsTheOtherParticipant() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, sent.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+
+        ReportResponse report = conversationService.reportParticipant(a, conversationId, reportReasonId("HARASSMENT"), "Threatening messages");
+
+        assertThat(report.reportedUserId()).isEqualTo(b.uuid());
+        assertThat(report.reasonCode()).isEqualTo("HARASSMENT");
+    }
+
+    @Test
+    void reportingAMessageResolvesItsInternalIdThroughMessageLookup() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, sent.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+        UUID messageId = insertMessage(conversationId, b, "unwanted message");
+
+        ReportResponse report = reportService.create(a, new CreateReportRequest(null, messageId, reportReasonId("OTHER"), null));
+
+        assertThat(report.reportedMessageId()).isEqualTo(messageId);
+
+        UUID unknownMessage = UUID.randomUUID();
+        assertThatThrownBy(() -> reportService.create(a, new CreateReportRequest(null, unknownMessage, reportReasonId("OTHER"), null)))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.MESSAGE_NOT_FOUND));
+    }
+
+    @Test
+    void verificationStartsUnverifiedThenMovesToPendingOnRequestAndIsSelfOnly() {
+        AuthenticatedUser me = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser other = discoverableUser("MALE", 30, "DATING");
+
+        assertThat(verificationService.myStatus(me).status()).isEqualTo("UNVERIFIED");
+
+        VerificationStatusResponse submitted = verificationService.submit(me, new SubmitVerificationRequest("SELFIE", List.of()));
+        assertThat(submitted.id()).isNotNull();
+        assertThat(submitted.status()).isEqualTo("PENDING");
+        assertThat(submitted.verificationType()).isEqualTo("SELFIE");
+        assertThat(verificationService.myStatus(me).status()).isEqualTo("PENDING");
+
+        VerificationStatusResponse fetched = verificationService.getOne(me, submitted.id());
+        assertThat(fetched.status()).isEqualTo("PENDING");
+
+        assertThatThrownBy(() -> verificationService.getOne(other, submitted.id()))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VERIFICATION_NOT_FOUND));
+    }
+
+    private Long reportReasonId(String code) {
+        return jdbcTemplate.queryForObject("select id from report_reason where code = ?", Long.class, code);
     }
 }

@@ -22,8 +22,10 @@ import com.pavitraristaa.messaging.repository.MessageAttachmentRepository;
 import com.pavitraristaa.profile.dto.UserSummaryResponse;
 import com.pavitraristaa.profile.mapper.UserSummaryMapper;
 import com.pavitraristaa.profile.repository.UserProfileRepository;
+import com.pavitraristaa.trust.dto.ReportResponse;
 import com.pavitraristaa.trust.entity.Block;
 import com.pavitraristaa.trust.repository.BlockRepository;
+import com.pavitraristaa.trust.service.ReportService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -44,6 +46,7 @@ public class ConversationService {
     private final UserSummaryMapper userSummaryMapper;
     private final MediaFileMapper mediaFileMapper;
     private final BlockRepository blockRepository;
+    private final ReportService reportService;
 
     public ConversationService(
             AuthService authService,
@@ -53,7 +56,8 @@ public class ConversationService {
             UserProfileRepository userProfileRepository,
             UserSummaryMapper userSummaryMapper,
             MediaFileMapper mediaFileMapper,
-            BlockRepository blockRepository
+            BlockRepository blockRepository,
+            ReportService reportService
     ) {
         this.authService = authService;
         this.conversationRepository = conversationRepository;
@@ -63,6 +67,7 @@ public class ConversationService {
         this.userSummaryMapper = userSummaryMapper;
         this.mediaFileMapper = mediaFileMapper;
         this.blockRepository = blockRepository;
+        this.reportService = reportService;
     }
 
     // --- Reacts to the connections module forming/ending a match. Connections has no dependency on messaging;
@@ -166,6 +171,14 @@ public class ConversationService {
         conversation.setStatus(ConversationStatus.CLOSED);
         conversation.setUpdatedAt(Instant.now());
         conversationRepository.save(conversation);
+    }
+
+    @Transactional
+    public ReportResponse reportParticipant(AuthenticatedUser principal, UUID conversationId, Long reasonId, String details) {
+        UserAccount self = authService.requireUsable(principal);
+        Conversation conversation = requireParticipant(self, conversationId);
+        UserAccount other = otherParticipant(conversation, self);
+        return reportService.create(principal, other.getUuid(), null, reasonId, details);
     }
 
     Conversation requireParticipant(UserAccount self, UUID conversationId) {
