@@ -61,6 +61,8 @@ public class SecurityConfig {
                         .requestMatchers(PUBLIC_AUTH).permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/relationship-modes").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/master-data/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/reports/reasons").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/safety-center").permitAll()
                         .requestMatchers(
                                 "/swagger-ui.html",
                                 "/swagger-ui/**",

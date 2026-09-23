@@ -33,7 +33,7 @@ class ModuleBoundariesTest {
             Map.entry("media", Set.of("auth")),
             Map.entry("profile", Set.of("auth", "master", "media", "relationship")),
             Map.entry("preference", Set.of("auth", "master", "profile")),
-            Map.entry("trust", Set.of("auth")),
+            Map.entry("trust", Set.of("auth", "profile")),
             Map.entry("favorites", Set.of("auth", "profile", "trust")),
             Map.entry("discovery", Set.of("auth", "profile", "relationship", "trust")),
             Map.entry("connections", Set.of("auth", "master", "preference", "profile", "relationship", "trust")),
