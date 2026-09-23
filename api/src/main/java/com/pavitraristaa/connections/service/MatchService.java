@@ -12,6 +12,7 @@ import com.pavitraristaa.connections.dto.CompatibilityResponse.CompatibilityFact
 import com.pavitraristaa.connections.dto.MatchResponse;
 import com.pavitraristaa.connections.entity.Match;
 import com.pavitraristaa.connections.entity.MatchStatus;
+import com.pavitraristaa.connections.event.MatchEndedEvent;
 import com.pavitraristaa.connections.repository.MatchRepository;
 import com.pavitraristaa.master.entity.MasterValue;
 import com.pavitraristaa.preference.entity.PartnerPreference;
@@ -28,6 +29,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,19 +41,22 @@ public class MatchService {
     private final UserProfileRepository userProfileRepository;
     private final PartnerPreferenceRepository partnerPreferenceRepository;
     private final UserSummaryMapper userSummaryMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public MatchService(
             AuthService authService,
             MatchRepository matchRepository,
             UserProfileRepository userProfileRepository,
             PartnerPreferenceRepository partnerPreferenceRepository,
-            UserSummaryMapper userSummaryMapper
+            UserSummaryMapper userSummaryMapper,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.authService = authService;
         this.matchRepository = matchRepository;
         this.userProfileRepository = userProfileRepository;
         this.partnerPreferenceRepository = partnerPreferenceRepository;
         this.userSummaryMapper = userSummaryMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional(readOnly = true)
@@ -86,6 +91,7 @@ public class MatchService {
             match.setStatus(MatchStatus.UNMATCHED);
             match.setUnmatchedAt(Instant.now());
             matchRepository.save(match);
+            eventPublisher.publishEvent(new MatchEndedEvent(match));
         }
         return toResponse(match, self);
     }

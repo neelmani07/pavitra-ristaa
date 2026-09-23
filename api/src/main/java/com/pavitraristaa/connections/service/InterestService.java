@@ -13,6 +13,7 @@ import com.pavitraristaa.connections.entity.InterestStatus;
 import com.pavitraristaa.connections.entity.InterestStatusHistory;
 import com.pavitraristaa.connections.entity.Match;
 import com.pavitraristaa.connections.entity.MatchStatus;
+import com.pavitraristaa.connections.event.MatchActivatedEvent;
 import com.pavitraristaa.connections.repository.InterestRepository;
 import com.pavitraristaa.connections.repository.InterestStatusHistoryRepository;
 import com.pavitraristaa.connections.repository.MatchRepository;
@@ -28,6 +29,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,6 +44,7 @@ public class InterestService {
     private final RelationshipModeRepository relationshipModeRepository;
     private final BlockRepository blockRepository;
     private final UserSummaryMapper userSummaryMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public InterestService(
             AuthService authService,
@@ -51,7 +54,8 @@ public class InterestService {
             MatchRepository matchRepository,
             RelationshipModeRepository relationshipModeRepository,
             BlockRepository blockRepository,
-            UserSummaryMapper userSummaryMapper
+            UserSummaryMapper userSummaryMapper,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.authService = authService;
         this.userProfileRepository = userProfileRepository;
@@ -61,6 +65,7 @@ public class InterestService {
         this.relationshipModeRepository = relationshipModeRepository;
         this.blockRepository = blockRepository;
         this.userSummaryMapper = userSummaryMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -171,6 +176,7 @@ public class InterestService {
         match.setMatchedAt(now);
         match.setUnmatchedAt(null);
         matchRepository.save(match);
+        eventPublisher.publishEvent(new MatchActivatedEvent(match));
     }
 
     private void transition(Interest interest, InterestStatus newStatus, UserAccount changedBy) {
