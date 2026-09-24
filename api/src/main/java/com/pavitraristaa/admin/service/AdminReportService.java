@@ -5,6 +5,7 @@ import com.pavitraristaa.admin.dto.ResolveReportRequest;
 import com.pavitraristaa.admin.entity.Moderation;
 import com.pavitraristaa.admin.entity.ModerationAction;
 import com.pavitraristaa.admin.entity.ModerationStatus;
+import com.pavitraristaa.admin.event.ReportResolvedEvent;
 import com.pavitraristaa.admin.repository.ModerationRepository;
 import com.pavitraristaa.auth.entity.UserAccount;
 import com.pavitraristaa.auth.repository.UserAccountRepository;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,17 +39,20 @@ public class AdminReportService {
     private final ModerationRepository moderationRepository;
     private final UserAccountRepository userAccountRepository;
     private final AuditLogService auditLogService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public AdminReportService(
             ReportRepository reportRepository,
             ModerationRepository moderationRepository,
             UserAccountRepository userAccountRepository,
-            AuditLogService auditLogService
+            AuditLogService auditLogService,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.reportRepository = reportRepository;
         this.moderationRepository = moderationRepository;
         this.userAccountRepository = userAccountRepository;
         this.auditLogService = auditLogService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional(readOnly = true)
@@ -101,6 +106,7 @@ public class AdminReportService {
             auditLogService.record(admin, "REPORT_RESOLVED", "report", saved.getId(), Map.of("status", newStatus.name()));
         }
 
+        eventPublisher.publishEvent(new ReportResolvedEvent(saved.getReporter(), newStatus.name()));
         return toResponse(saved);
     }
 

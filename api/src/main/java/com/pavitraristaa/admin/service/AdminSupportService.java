@@ -3,6 +3,7 @@ package com.pavitraristaa.admin.service;
 import com.pavitraristaa.admin.dto.AdminSupportTicketResponse;
 import com.pavitraristaa.admin.dto.AssignTicketRequest;
 import com.pavitraristaa.admin.dto.ResolveTicketRequest;
+import com.pavitraristaa.admin.event.SupportTicketResolvedEvent;
 import com.pavitraristaa.auth.entity.UserAccount;
 import com.pavitraristaa.auth.repository.UserAccountRepository;
 import com.pavitraristaa.common.api.PagedData;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,12 +31,15 @@ public class AdminSupportService {
     private final SupportTicketRepository supportTicketRepository;
     private final UserAccountRepository userAccountRepository;
     private final AuditLogService auditLogService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public AdminSupportService(
-            SupportTicketRepository supportTicketRepository, UserAccountRepository userAccountRepository, AuditLogService auditLogService) {
+            SupportTicketRepository supportTicketRepository, UserAccountRepository userAccountRepository,
+            AuditLogService auditLogService, ApplicationEventPublisher eventPublisher) {
         this.supportTicketRepository = supportTicketRepository;
         this.userAccountRepository = userAccountRepository;
         this.auditLogService = auditLogService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional(readOnly = true)
@@ -81,6 +86,7 @@ public class AdminSupportService {
         SupportTicket saved = supportTicketRepository.save(ticket);
         UserAccount admin = actingAdmin(principal);
         auditLogService.record(admin, "SUPPORT_TICKET_RESOLVED", "support_ticket", saved.getId(), null);
+        eventPublisher.publishEvent(new SupportTicketResolvedEvent(saved.getUser()));
         return toResponse(saved);
     }
 

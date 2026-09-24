@@ -51,6 +51,12 @@ import com.pavitraristaa.messaging.dto.MessageResponse;
 import com.pavitraristaa.messaging.dto.ReactionRequest;
 import com.pavitraristaa.messaging.service.ConversationService;
 import com.pavitraristaa.messaging.service.MessageService;
+import com.pavitraristaa.notifications.dto.NotificationResponse;
+import com.pavitraristaa.notifications.dto.NotificationSettingResponse;
+import com.pavitraristaa.notifications.dto.NotificationSettingUpdate;
+import com.pavitraristaa.notifications.dto.UpdateNotificationSettingsRequest;
+import com.pavitraristaa.notifications.service.NotificationService;
+import com.pavitraristaa.notifications.service.NotificationSettingService;
 import com.pavitraristaa.preference.dto.PartnerPreferenceRequest;
 import com.pavitraristaa.preference.dto.PartnerPreferenceResponse;
 import com.pavitraristaa.preference.dto.PreferenceValueRequest;
@@ -117,6 +123,8 @@ abstract class AbstractPersistenceTests {
     @Autowired private AdminSupportService adminSupportService;
     @Autowired private AdminSettingService adminSettingService;
     @Autowired private AuditLogService auditLogService;
+    @Autowired private NotificationService notificationService;
+    @Autowired private NotificationSettingService notificationSettingService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -1055,4 +1063,143 @@ abstract class AbstractPersistenceTests {
                 user.uuid(), success, failureReason);
     }
 
+    // --- Notifications ---
+    // Each producer module (connections, admin) publishes a domain event with zero knowledge that notifications
+    // listens; these tests drive the producing action through its own service and assert the resulting
+    // notification, exercising the whole event -> listener -> persisted row chain rather than the listener alone.
+
+    @Test
+    void sendingAnInterestNotifiesTheReceiverAndCanBeMarkedRead() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+
+        interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+
+        List<NotificationResponse> unread = notificationService.list(b, "INTEREST_RECEIVED", true, null, null);
+        assertThat(unread).hasSize(1);
+        assertThat(unread.get(0).isRead()).isFalse();
+        assertThat(notificationService.list(a, "INTEREST_RECEIVED", null, null, null)).isEmpty();
+
+        NotificationResponse marked = notificationService.markRead(b, unread.get(0).id());
+        assertThat(marked.isRead()).isTrue();
+        assertThat(marked.readAt()).isNotNull();
+        assertThat(notificationService.list(b, "INTEREST_RECEIVED", true, null, null)).isEmpty();
+    }
+
+    @Test
+    void acceptingAnInterestNotifiesBothMatchedUsers() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+
+        interestService.accept(b, sent.id());
+
+        assertThat(notificationService.list(a, "MATCH_CREATED", null, null, null)).hasSize(1);
+        assertThat(notificationService.list(b, "MATCH_CREATED", null, null, null)).hasSize(1);
+    }
+
+    @Test
+    void adminVerificationDecisionsNotifyTheProfileOwner() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser approved = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser rejected = discoverableUser("MALE", 30, "DATING");
+        VerificationStatusResponse approvedSubmission = verificationService.submit(approved, new SubmitVerificationRequest("SELFIE", List.of()));
+        VerificationStatusResponse rejectedSubmission = verificationService.submit(rejected, new SubmitVerificationRequest("ID_CARD", List.of()));
+
+        adminVerificationService.approve(admin, approvedSubmission.id(), null);
+        adminVerificationService.reject(admin, rejectedSubmission.id(), null);
+
+        assertThat(notificationService.list(approved, "VERIFICATION_APPROVED", null, null, null)).hasSize(1);
+        assertThat(notificationService.list(rejected, "VERIFICATION_REJECTED", null, null, null)).hasSize(1);
+    }
+
+    @Test
+    void resolvingAReportNotifiesTheReporter() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser reporter = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser reported = discoverableUser("MALE", 30, "DATING");
+        ReportResponse report = reportService.create(
+                reporter, new CreateReportRequest(reported.uuid(), null, reportReasonId("SPAM"), null));
+
+        adminReportService.resolve(admin, report.id(), new ResolveReportRequest("DISMISSED", null, null));
+
+        assertThat(notificationService.list(reporter, "REPORT_RESOLVED", null, null, null)).hasSize(1);
+        assertThat(notificationService.list(reported, "REPORT_RESOLVED", null, null, null)).isEmpty();
+    }
+
+    @Test
+    void suspendingAndReactivatingAUserNotifiesThem() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser target = discoverableUser("FEMALE", 27, "MARRIAGE");
+
+        adminUserService.suspend(admin, target.uuid(), new SuspendUserRequest("Policy violation"));
+        // Not notificationService.list(target, ...) here: AccountStateGuard.assertUsableSession() blocks every
+        // self-service call, including this one, while SUSPENDED - by design, same as every other endpoint. The
+        // notification row still exists; check it directly, the way a moderator/admin path would have to.
+        assertThat(countNotifications(target, "ACCOUNT_SUSPENDED")).isEqualTo(1);
+
+        adminUserService.activate(admin, target.uuid());
+        assertThat(notificationService.list(target, "ACCOUNT_REACTIVATED", null, null, null)).hasSize(1);
+        assertThat(notificationService.list(target, "ACCOUNT_SUSPENDED", null, null, null)).hasSize(1);
+    }
+
+    private long countNotifications(AuthenticatedUser user, String type) {
+        return jdbcTemplate.queryForObject(
+                "select count(*) from notification where type = ? and user_id = (select id from \"user\" where uuid = ?)",
+                Long.class, type, user.uuid());
+    }
+
+    @Test
+    void resolvingASupportTicketNotifiesItsOwner() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser owner = userWithProfile();
+        SupportTicketResponse ticket = supportTicketService.create(
+                owner, new CreateSupportTicketRequest("ACCOUNT", "Can't log in", "Locked out", "URGENT"));
+
+        adminSupportService.resolve(admin, ticket.id(), null);
+
+        assertThat(notificationService.list(owner, "SUPPORT_TICKET_RESOLVED", null, null, null)).hasSize(1);
+    }
+
+    @Test
+    void notificationSettingsDefaultToEnabledAndOptOutSuppressesFutureNotifications() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+
+        List<NotificationSettingResponse> defaults = notificationSettingService.get(b);
+        assertThat(defaults).hasSize(8);
+        assertThat(defaults).allSatisfy(s -> {
+            assertThat(s.inAppEnabled()).isTrue();
+            assertThat(s.smsEnabled()).isFalse();
+        });
+
+        List<NotificationSettingResponse> updated = notificationSettingService.update(
+                b, new UpdateNotificationSettingsRequest(List.of(
+                        new NotificationSettingUpdate("INTEREST_RECEIVED", false, null, null, null))));
+        assertThat(updated).filteredOn(s -> s.notificationType().equals("INTEREST_RECEIVED"))
+                .extracting(NotificationSettingResponse::inAppEnabled).containsExactly(false);
+
+        interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        assertThat(notificationService.list(b, "INTEREST_RECEIVED", null, null, null)).isEmpty();
+    }
+
+    @Test
+    void deleteAndMarkAllReadAreOwnerOnly() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        NotificationResponse notification = notificationService.list(b, null, null, null, null).get(0);
+
+        assertThatThrownBy(() -> notificationService.getOne(a, notification.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.NOTIFICATION_NOT_FOUND));
+        assertThatThrownBy(() -> notificationService.delete(a, notification.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.NOTIFICATION_NOT_FOUND));
+
+        notificationService.markAllRead(b);
+        assertThat(notificationService.list(b, null, true, null, null)).isEmpty();
+
+        notificationService.delete(b, notification.id());
+        assertThatThrownBy(() -> notificationService.getOne(b, notification.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.NOTIFICATION_NOT_FOUND));
+    }
 }

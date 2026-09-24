@@ -2,6 +2,7 @@ package com.pavitraristaa.admin.service;
 
 import com.pavitraristaa.admin.dto.AdminVerificationResponse;
 import com.pavitraristaa.admin.dto.VerificationDecisionRequest;
+import com.pavitraristaa.admin.event.VerificationDecidedEvent;
 import com.pavitraristaa.auth.entity.UserAccount;
 import com.pavitraristaa.auth.repository.UserAccountRepository;
 import com.pavitraristaa.common.api.PagedData;
@@ -14,6 +15,7 @@ import com.pavitraristaa.profile.repository.ProfileVerificationRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,15 +31,18 @@ public class AdminVerificationService {
     private final ProfileVerificationRepository profileVerificationRepository;
     private final UserAccountRepository userAccountRepository;
     private final AuditLogService auditLogService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public AdminVerificationService(
             ProfileVerificationRepository profileVerificationRepository,
             UserAccountRepository userAccountRepository,
-            AuditLogService auditLogService
+            AuditLogService auditLogService,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.profileVerificationRepository = profileVerificationRepository;
         this.userAccountRepository = userAccountRepository;
         this.auditLogService = auditLogService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional(readOnly = true)
@@ -71,6 +76,7 @@ public class AdminVerificationService {
         }
         ProfileVerification saved = profileVerificationRepository.save(verification);
         auditLogService.record(admin, auditAction, "profile_verification", saved.getId(), null);
+        eventPublisher.publishEvent(new VerificationDecidedEvent(saved.getProfile().getUser(), VERIFIED.equals(newStatus)));
         return toResponse(saved);
     }
 

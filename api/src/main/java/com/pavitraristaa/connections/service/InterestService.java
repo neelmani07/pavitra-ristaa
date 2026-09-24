@@ -13,6 +13,7 @@ import com.pavitraristaa.connections.entity.InterestStatus;
 import com.pavitraristaa.connections.entity.InterestStatusHistory;
 import com.pavitraristaa.connections.entity.Match;
 import com.pavitraristaa.connections.entity.MatchStatus;
+import com.pavitraristaa.connections.event.InterestReceivedEvent;
 import com.pavitraristaa.connections.event.MatchActivatedEvent;
 import com.pavitraristaa.connections.repository.InterestRepository;
 import com.pavitraristaa.connections.repository.InterestStatusHistoryRepository;
@@ -99,7 +100,9 @@ public class InterestService {
         interest.setStatus(InterestStatus.PENDING);
         interest.setMessage(blankToNull(request.message()));
         interest.setCreatedAt(Instant.now());
-        return toResponse(interestRepository.save(interest));
+        Interest saved = interestRepository.save(interest);
+        eventPublisher.publishEvent(new InterestReceivedEvent(saved));
+        return toResponse(saved);
     }
 
     @Transactional(readOnly = true)

@@ -4,6 +4,7 @@ import com.pavitraristaa.admin.dto.AdminUserResponse;
 import com.pavitraristaa.admin.dto.LoginHistoryResponse;
 import com.pavitraristaa.admin.dto.SuspendUserRequest;
 import com.pavitraristaa.admin.dto.UpdateUserRolesRequest;
+import com.pavitraristaa.admin.event.UserStatusChangedEvent;
 import com.pavitraristaa.auth.entity.AccountStatus;
 import com.pavitraristaa.auth.entity.LoginHistory;
 import com.pavitraristaa.auth.entity.Role;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -43,6 +45,7 @@ public class AdminUserService {
     private final LoginHistoryRepository loginHistoryRepository;
     private final SessionTokenService sessionTokenService;
     private final AuditLogService auditLogService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public AdminUserService(
             UserAccountRepository userAccountRepository,
@@ -50,7 +53,8 @@ public class AdminUserService {
             RoleRepository roleRepository,
             LoginHistoryRepository loginHistoryRepository,
             SessionTokenService sessionTokenService,
-            AuditLogService auditLogService
+            AuditLogService auditLogService,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.userAccountRepository = userAccountRepository;
         this.userRoleRepository = userRoleRepository;
@@ -58,6 +62,7 @@ public class AdminUserService {
         this.loginHistoryRepository = loginHistoryRepository;
         this.sessionTokenService = sessionTokenService;
         this.auditLogService = auditLogService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional(readOnly = true)
@@ -109,6 +114,7 @@ public class AdminUserService {
         sessionTokenService.revokeAll(target);
         UserAccount admin = actingAdmin(principal);
         auditLogService.record(admin, "USER_SUSPENDED", "user", target.getId(), Map.of("reason", request.reason()));
+        eventPublisher.publishEvent(new UserStatusChangedEvent(target, AccountStatus.SUSPENDED.name()));
         return toResponse(target);
     }
 
@@ -124,6 +130,7 @@ public class AdminUserService {
         userAccountRepository.save(target);
         UserAccount admin = actingAdmin(principal);
         auditLogService.record(admin, "USER_ACTIVATED", "user", target.getId(), null);
+        eventPublisher.publishEvent(new UserStatusChangedEvent(target, AccountStatus.ACTIVE.name()));
         return toResponse(target);
     }
 
