@@ -39,6 +39,11 @@ import com.pavitraristaa.profile.dto.UpdatePhotoRequest;
 import com.pavitraristaa.profile.dto.UpdateProfileRequest;
 import com.pavitraristaa.profile.dto.UserSummaryResponse;
 import com.pavitraristaa.profile.service.ProfileService;
+import com.pavitraristaa.support.dto.CreateSupportTicketRequest;
+import com.pavitraristaa.support.dto.SupportTicketResponse;
+import com.pavitraristaa.support.dto.UpdateSupportTicketRequest;
+import com.pavitraristaa.support.service.HelpContentService;
+import com.pavitraristaa.support.service.SupportTicketService;
 import com.pavitraristaa.trust.dto.CreateReportRequest;
 import com.pavitraristaa.trust.dto.ReportResponse;
 import com.pavitraristaa.trust.dto.SubmitVerificationRequest;
@@ -79,6 +84,8 @@ abstract class AbstractPersistenceTests {
     @Autowired private BlockService blockService;
     @Autowired private ReportService reportService;
     @Autowired private VerificationService verificationService;
+    @Autowired private SupportTicketService supportTicketService;
+    @Autowired private HelpContentService helpContentService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -813,5 +820,45 @@ abstract class AbstractPersistenceTests {
 
     private Long reportReasonId(String code) {
         return jdbcTemplate.queryForObject("select id from report_reason where code = ?", Long.class, code);
+    }
+
+    // --- Support ---
+
+    @Test
+    void supportTicketRoundTripsAndIsOwnerOnlyAndLocksOnceResolved() {
+        AuthenticatedUser me = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser other = discoverableUser("MALE", 30, "DATING");
+
+        assertThat(supportTicketService.listMine(me, null, null)).isEmpty();
+        SupportTicketResponse created = supportTicketService.create(
+                me, new CreateSupportTicketRequest("BILLING", "Can't update payment method", "Details here", "HIGH"));
+        assertThat(created.status()).isEqualTo("OPEN");
+        assertThat(created.priority()).isEqualTo("HIGH");
+        assertThat(supportTicketService.listMine(me, null, null)).extracting(SupportTicketResponse::id).containsExactly(created.id());
+
+        SupportTicketResponse updated = supportTicketService.update(me, created.id(), new UpdateSupportTicketRequest("More detail added"));
+        assertThat(updated.description()).isEqualTo("More detail added");
+
+        assertThatThrownBy(() -> supportTicketService.getOne(other, created.id()))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SUPPORT_TICKET_NOT_FOUND));
+        assertThatThrownBy(() -> supportTicketService.update(other, created.id(), new UpdateSupportTicketRequest("hijack")))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SUPPORT_TICKET_NOT_FOUND));
+
+        jdbcTemplate.update("update support_ticket set status = 'RESOLVED' where uuid = ?", created.id());
+        assertThatThrownBy(() -> supportTicketService.update(me, created.id(), new UpdateSupportTicketRequest("too late")))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void helpAndLegalContentAreServedAndRejectAnUnknownDocumentType() {
+        assertThat(helpContentService.help().topics()).isNotEmpty();
+        assertThat(helpContentService.legalDocument("terms").documentType()).isEqualTo("TERMS");
+
+        assertThatThrownBy(() -> helpContentService.legalDocument("NOT_A_REAL_DOC"))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.RESOURCE_NOT_FOUND));
     }
 }
