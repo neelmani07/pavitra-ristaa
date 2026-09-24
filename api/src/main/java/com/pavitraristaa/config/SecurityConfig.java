@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -26,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 @EnableConfigurationProperties(PavitraProperties.class)
+@EnableMethodSecurity
 public class SecurityConfig {
 
     private static final String[] PUBLIC_AUTH = {
@@ -65,6 +67,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/safety-center").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/help").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/legal/**").permitAll()
+                        // Baseline for every /admin/** path - defense in depth alongside the finer-grained
+                        // @PreAuthorize on individual controller methods (some admin actions are ADMIN/SUPER_ADMIN
+                        // only; this just guarantees a plain USER can never reach anything under /admin/**).
+                        .requestMatchers("/api/v1/admin/**").hasAnyRole("MODERATOR", "ADMIN", "SUPER_ADMIN")
                         .requestMatchers(
                                 "/swagger-ui.html",
                                 "/swagger-ui/**",

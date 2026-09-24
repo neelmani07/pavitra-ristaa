@@ -2,6 +2,7 @@ package com.pavitraristaa.support.repository;
 
 import com.pavitraristaa.auth.entity.UserAccount;
 import com.pavitraristaa.support.entity.SupportTicket;
+import com.pavitraristaa.support.entity.TicketStatus;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -16,4 +17,10 @@ public interface SupportTicketRepository extends JpaRepository<SupportTicket, Lo
 
     @EntityGraph(attributePaths = {"user", "assignedTo"})
     Page<SupportTicket> findByUserOrderByCreatedAtDesc(UserAccount user, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"user", "assignedTo"})
+    Page<SupportTicket> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+    @EntityGraph(attributePaths = {"user", "assignedTo"})
+    Page<SupportTicket> findByStatusOrderByCreatedAtDesc(TicketStatus status, Pageable pageable);
 }

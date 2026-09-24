@@ -3,6 +3,30 @@ package com.pavitraristaa.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.pavitraristaa.admin.dto.AdminModerationResponse;
+import com.pavitraristaa.admin.dto.AdminReportResponse;
+import com.pavitraristaa.admin.dto.AdminSettingResponse;
+import com.pavitraristaa.admin.dto.AdminSupportTicketResponse;
+import com.pavitraristaa.admin.dto.AdminUserResponse;
+import com.pavitraristaa.admin.dto.AdminVerificationResponse;
+import com.pavitraristaa.admin.dto.AssignTicketRequest;
+import com.pavitraristaa.admin.dto.AuditLogResponse;
+import com.pavitraristaa.admin.dto.CreateModerationRequest;
+import com.pavitraristaa.admin.dto.LoginHistoryResponse;
+import com.pavitraristaa.admin.dto.ResolveModerationRequest;
+import com.pavitraristaa.admin.dto.ResolveReportRequest;
+import com.pavitraristaa.admin.dto.ResolveTicketRequest;
+import com.pavitraristaa.admin.dto.SuspendUserRequest;
+import com.pavitraristaa.admin.dto.UpdateSettingRequest;
+import com.pavitraristaa.admin.dto.UpdateUserRolesRequest;
+import com.pavitraristaa.admin.dto.VerificationDecisionRequest;
+import com.pavitraristaa.admin.service.AdminModerationService;
+import com.pavitraristaa.admin.service.AdminReportService;
+import com.pavitraristaa.admin.service.AdminSettingService;
+import com.pavitraristaa.admin.service.AdminSupportService;
+import com.pavitraristaa.admin.service.AdminUserService;
+import com.pavitraristaa.admin.service.AdminVerificationService;
+import com.pavitraristaa.admin.service.AuditLogService;
 import com.pavitraristaa.auth.entity.AccountStatus;
 import com.pavitraristaa.auth.entity.UserAccount;
 import com.pavitraristaa.auth.repository.UserAccountRepository;
@@ -86,6 +110,13 @@ abstract class AbstractPersistenceTests {
     @Autowired private VerificationService verificationService;
     @Autowired private SupportTicketService supportTicketService;
     @Autowired private HelpContentService helpContentService;
+    @Autowired private AdminUserService adminUserService;
+    @Autowired private AdminVerificationService adminVerificationService;
+    @Autowired private AdminReportService adminReportService;
+    @Autowired private AdminModerationService adminModerationService;
+    @Autowired private AdminSupportService adminSupportService;
+    @Autowired private AdminSettingService adminSettingService;
+    @Autowired private AuditLogService auditLogService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -861,4 +892,167 @@ abstract class AbstractPersistenceTests {
                 .isInstanceOfSatisfying(ApiException.class,
                         e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.RESOURCE_NOT_FOUND));
     }
+
+    // --- Admin ---
+    // Role enforcement itself (@PreAuthorize on the admin controllers) isn't exercised here - these tests call the
+    // admin services directly, same as every other module in this file, and the role gate is covered separately
+    // by the HTTP smoke test. What's under test here is the admin business logic: status transitions, the
+    // report -> moderation link, and that every write lands in audit_log.
+
+    @Test
+    void adminCanSearchSuspendActivateAndDeleteAUser() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser target = discoverableUser("FEMALE", 27, "MARRIAGE");
+
+        PagedData<AdminUserResponse> found = adminUserService.search(null, target.uuid().toString().substring(0, 8), null, null);
+        assertThat(found.items()).extracting(AdminUserResponse::id).contains(target.uuid());
+
+        AdminUserResponse suspended = adminUserService.suspend(admin, target.uuid(), new SuspendUserRequest("Repeated harassment reports"));
+        assertThat(suspended.accountStatus()).isEqualTo("SUSPENDED");
+
+        AdminUserResponse activated = adminUserService.activate(admin, target.uuid());
+        assertThat(activated.accountStatus()).isEqualTo("ACTIVE");
+
+        adminUserService.delete(admin, target.uuid());
+        assertThat(adminUserService.getOne(target.uuid()).accountStatus()).isEqualTo("DELETED");
+
+        assertThatThrownBy(() -> adminUserService.suspend(admin, target.uuid(), new SuspendUserRequest("too late")))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+
+        PagedData<AuditLogResponse> log = auditLogService.list(null, null);
+        assertThat(log.items()).extracting(AuditLogResponse::action)
+                .contains("USER_SUSPENDED", "USER_ACTIVATED", "USER_DELETED");
+    }
+
+    @Test
+    void adminCanReassignUserRolesAndRejectsUnknownCodes() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser target = userWithProfile();
+
+        AdminUserResponse updated = adminUserService.updateRoles(admin, target.uuid(), new UpdateUserRolesRequest(List.of("MODERATOR")));
+        assertThat(updated.roles()).containsExactly("MODERATOR");
+
+        assertThatThrownBy(() -> adminUserService.updateRoles(admin, target.uuid(), new UpdateUserRolesRequest(List.of("NOT_A_ROLE"))))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void adminLoginHistoryListsThatUsersEntriesOnly() {
+        AuthenticatedUser target = userWithProfile();
+        AuthenticatedUser other = userWithProfile();
+        insertLoginHistory(target, true, null);
+        insertLoginHistory(target, false, "BAD_PASSWORD");
+        insertLoginHistory(other, true, null);
+
+        PagedData<LoginHistoryResponse> history = adminUserService.loginHistory(target.uuid(), null, null);
+
+        assertThat(history.items()).hasSize(2);
+        assertThat(history.items()).extracting(LoginHistoryResponse::success).contains(true, false);
+    }
+
+    @Test
+    void adminApproveAndRejectMoveAVerificationOutOfPending() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser me = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser other = discoverableUser("MALE", 30, "DATING");
+        VerificationStatusResponse mine = verificationService.submit(me, new SubmitVerificationRequest("SELFIE", List.of()));
+        VerificationStatusResponse theirs = verificationService.submit(other, new SubmitVerificationRequest("ID_CARD", List.of()));
+
+        PagedData<AdminVerificationResponse> pending = adminVerificationService.listPending(null, null);
+        assertThat(pending.items()).extracting(AdminVerificationResponse::id).contains(mine.id(), theirs.id());
+
+        AdminVerificationResponse approved = adminVerificationService.approve(admin, mine.id(), new VerificationDecisionRequest("Looks good"));
+        assertThat(approved.verificationStatus()).isEqualTo("VERIFIED");
+        assertThat(verificationService.myStatus(me).status()).isEqualTo("VERIFIED");
+
+        AdminVerificationResponse rejected = adminVerificationService.reject(admin, theirs.id(), new VerificationDecisionRequest("Blurry photo"));
+        assertThat(rejected.verificationStatus()).isEqualTo("REJECTED");
+
+        assertThatThrownBy(() -> adminVerificationService.approve(admin, mine.id(), null))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VERIFICATION_NOT_FOUND));
+    }
+
+    @Test
+    void resolvingAReportWithAModerationActionOpensAModerationEntry() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser reporter = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser reported = discoverableUser("MALE", 30, "DATING");
+        ReportResponse report = reportService.create(
+                reporter, new CreateReportRequest(reported.uuid(), null, reportReasonId("HARASSMENT"), "Won't stop messaging"));
+
+        assertThat(adminReportService.list(null, null, null).items()).extracting(AdminReportResponse::id).contains(report.id());
+        assertThat(adminReportService.getOne(report.id()).status()).isEqualTo("OPEN");
+
+        AdminReportResponse resolved = adminReportService.resolve(
+                admin, report.id(), new ResolveReportRequest("RESOLVED", "SUSPEND", "Confirmed harassment"));
+        assertThat(resolved.status()).isEqualTo("RESOLVED");
+
+        PagedData<AdminModerationResponse> moderation = adminModerationService.list(null, null, null);
+        assertThat(moderation.items()).anySatisfy(entry -> {
+            assertThat(entry.targetUserId()).isEqualTo(reported.uuid());
+            assertThat(entry.action()).isEqualTo("SUSPEND");
+            assertThat(entry.status()).isEqualTo("OPEN");
+        });
+
+        assertThatThrownBy(() -> adminReportService.resolve(admin, report.id(), new ResolveReportRequest("RESOLVED", null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void adminCanOpenAndResolveAStandaloneModerationAction() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser target = userWithProfile();
+
+        AdminModerationResponse opened = adminModerationService.create(
+                admin, new CreateModerationRequest(target.uuid(), "WARN", "Inappropriate profile photo"));
+        assertThat(opened.status()).isEqualTo("OPEN");
+        assertThat(opened.action()).isEqualTo("WARN");
+
+        AdminModerationResponse resolved = adminModerationService.resolve(admin, opened.id(), new ResolveModerationRequest("Photo removed by user"));
+        assertThat(resolved.status()).isEqualTo("RESOLVED");
+        assertThat(resolved.resolvedAt()).isNotNull();
+
+        assertThatThrownBy(() -> adminModerationService.resolve(admin, opened.id(), null))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void adminSupportTicketAssignDefaultsToCallerAndResolveClosesIt() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser me = userWithProfile();
+        SupportTicketResponse ticket = supportTicketService.create(
+                me, new CreateSupportTicketRequest("ACCOUNT", "Can't log in", "Locked out after too many attempts", "URGENT"));
+
+        assertThat(adminSupportService.list(null, null, null).items()).extracting(AdminSupportTicketResponse::id).contains(ticket.id());
+
+        AdminSupportTicketResponse assigned = adminSupportService.assign(admin, ticket.id(), new AssignTicketRequest(null));
+        assertThat(assigned.assignedToId()).isEqualTo(admin.uuid());
+        assertThat(assigned.status()).isEqualTo("IN_PROGRESS");
+
+        AdminSupportTicketResponse resolved = adminSupportService.resolve(admin, ticket.id(), new ResolveTicketRequest("Password reset for the user"));
+        assertThat(resolved.status()).isEqualTo("RESOLVED");
+        assertThat(resolved.resolvedAt()).isNotNull();
+    }
+
+    @Test
+    void adminSettingsUpsertCreatesThenUpdatesTheSameKey() {
+        AuthenticatedUser admin = principalFor(newUser());
+        String key = "discovery.daily_like_limit." + UUID.randomUUID();
+
+        AdminSettingResponse created = adminSettingService.upsert(admin, key, new UpdateSettingRequest("50"));
+        assertThat(created.value()).isEqualTo("50");
+        assertThat(adminSettingService.list()).extracting(AdminSettingResponse::key).contains(key);
+
+        AdminSettingResponse updated = adminSettingService.upsert(admin, key, new UpdateSettingRequest("75"));
+        assertThat(updated.value()).isEqualTo("75");
+        assertThat(adminSettingService.list().stream().filter(s -> s.key().equals(key)).count()).isEqualTo(1);
+    }
+
+    private void insertLoginHistory(AuthenticatedUser user, boolean success, String failureReason) {
+        jdbcTemplate.update(
+                "insert into login_history (user_id, login_type, success, failure_reason, login_at) "
+                        + "values ((select id from \"user\" where uuid = ?), 'PASSWORD', ?, ?, now())",
+                user.uuid(), success, failureReason);
+    }
+
 }
