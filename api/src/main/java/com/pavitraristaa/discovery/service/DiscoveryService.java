@@ -42,6 +42,7 @@ public class DiscoveryService {
     private final ProfileViewRepository profileViewRepository;
     private final RelationshipModeRepository relationshipModeRepository;
     private final UserSummaryMapper userSummaryMapper;
+    private final SearchHistoryService searchHistoryService;
 
     public DiscoveryService(
             AuthService authService,
@@ -50,7 +51,8 @@ public class DiscoveryService {
             DiscoveryProfileRepository discoveryProfileRepository,
             ProfileViewRepository profileViewRepository,
             RelationshipModeRepository relationshipModeRepository,
-            UserSummaryMapper userSummaryMapper
+            UserSummaryMapper userSummaryMapper,
+            SearchHistoryService searchHistoryService
     ) {
         this.authService = authService;
         this.profileService = profileService;
@@ -59,6 +61,7 @@ public class DiscoveryService {
         this.profileViewRepository = profileViewRepository;
         this.relationshipModeRepository = relationshipModeRepository;
         this.userSummaryMapper = userSummaryMapper;
+        this.searchHistoryService = searchHistoryService;
     }
 
     @Transactional(readOnly = true)
@@ -83,9 +86,10 @@ public class DiscoveryService {
         return runSearch(spec, page, size);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<UserSummaryResponse> search(AuthenticatedUser principal, DiscoverySearchRequest request) {
         UserAccount self = authService.requireUsable(principal);
+        searchHistoryService.record(self, request);
         SpiritualSearchFilterRequest spiritual = request.spiritual();
         Specification<UserProfile> spec = combine(
                 baseSpec(self, request.relationshipModes() == null ? List.of() : request.relationshipModes()),

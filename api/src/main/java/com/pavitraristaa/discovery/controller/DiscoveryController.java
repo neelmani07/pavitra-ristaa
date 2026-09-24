@@ -2,19 +2,29 @@ package com.pavitraristaa.discovery.controller;
 
 import com.pavitraristaa.common.api.ApiResponse;
 import com.pavitraristaa.common.security.CurrentUserAccessor;
+import com.pavitraristaa.discovery.dto.CreateSavedSearchRequest;
 import com.pavitraristaa.discovery.dto.DiscoverySearchRequest;
 import com.pavitraristaa.discovery.dto.HomeResponse;
+import com.pavitraristaa.discovery.dto.SavedSearchResponse;
+import com.pavitraristaa.discovery.dto.SearchHistoryResponse;
+import com.pavitraristaa.discovery.dto.UpdateSavedSearchRequest;
 import com.pavitraristaa.discovery.service.DiscoveryService;
+import com.pavitraristaa.discovery.service.RecommendationService;
+import com.pavitraristaa.discovery.service.SavedSearchService;
+import com.pavitraristaa.discovery.service.SearchHistoryService;
 import com.pavitraristaa.profile.dto.UserSummaryResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,10 +37,22 @@ import org.springframework.web.bind.annotation.RestController;
 public class DiscoveryController {
 
     private final DiscoveryService discoveryService;
+    private final RecommendationService recommendationService;
+    private final SavedSearchService savedSearchService;
+    private final SearchHistoryService searchHistoryService;
     private final CurrentUserAccessor currentUserAccessor;
 
-    public DiscoveryController(DiscoveryService discoveryService, CurrentUserAccessor currentUserAccessor) {
+    public DiscoveryController(
+            DiscoveryService discoveryService,
+            RecommendationService recommendationService,
+            SavedSearchService savedSearchService,
+            SearchHistoryService searchHistoryService,
+            CurrentUserAccessor currentUserAccessor
+    ) {
         this.discoveryService = discoveryService;
+        this.recommendationService = recommendationService;
+        this.savedSearchService = savedSearchService;
+        this.searchHistoryService = searchHistoryService;
         this.currentUserAccessor = currentUserAccessor;
     }
 
@@ -86,5 +108,66 @@ public class DiscoveryController {
     ) {
         return ApiResponse.ok(
                 discoveryService.recentlyViewed(currentUserAccessor.requireUser(), page, size), "Recently viewed");
+    }
+
+    @GetMapping("/discovery/recommendations")
+    @Operation(summary = "Get persisted recommendations")
+    public ApiResponse<List<UserSummaryResponse>> recommendations(
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size
+    ) {
+        return ApiResponse.ok(
+                recommendationService.list(currentUserAccessor.requireUser(), page, size), "Recommendations");
+    }
+
+    @PostMapping("/discovery/recommendations/refresh")
+    @Operation(summary = "Refresh recommendation set")
+    public ApiResponse<Void> refreshRecommendations() {
+        int count = recommendationService.refresh(currentUserAccessor.requireUser());
+        return ApiResponse.ok("Generated " + count + " recommendations");
+    }
+
+    @GetMapping("/discovery/saved-searches")
+    @Operation(summary = "List saved searches")
+    public ApiResponse<List<SavedSearchResponse>> listSavedSearches() {
+        return ApiResponse.ok(savedSearchService.list(currentUserAccessor.requireUser()), "Saved searches");
+    }
+
+    @PostMapping("/discovery/saved-searches")
+    @Operation(summary = "Create saved search")
+    public ApiResponse<SavedSearchResponse> createSavedSearch(@Valid @RequestBody CreateSavedSearchRequest request) {
+        return ApiResponse.ok(savedSearchService.create(currentUserAccessor.requireUser(), request), "Saved search created");
+    }
+
+    @PutMapping("/discovery/saved-searches/{searchId}")
+    @Operation(summary = "Update saved search")
+    public ApiResponse<SavedSearchResponse> updateSavedSearch(
+            @PathVariable Long searchId, @RequestBody UpdateSavedSearchRequest request) {
+        return ApiResponse.ok(
+                savedSearchService.update(currentUserAccessor.requireUser(), searchId, request), "Saved search updated");
+    }
+
+    @DeleteMapping("/discovery/saved-searches/{searchId}")
+    @Operation(summary = "Delete saved search")
+    public ApiResponse<Void> deleteSavedSearch(@PathVariable Long searchId) {
+        savedSearchService.delete(currentUserAccessor.requireUser(), searchId);
+        return ApiResponse.ok("Saved search deleted");
+    }
+
+    @GetMapping("/discovery/search-history")
+    @Operation(summary = "List recent search history")
+    public ApiResponse<List<SearchHistoryResponse>> searchHistory(
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size
+    ) {
+        return ApiResponse.ok(
+                searchHistoryService.list(currentUserAccessor.requireUser(), page, size), "Search history");
+    }
+
+    @DeleteMapping("/discovery/search-history")
+    @Operation(summary = "Clear search history")
+    public ApiResponse<Void> clearSearchHistory() {
+        searchHistoryService.clear(currentUserAccessor.requireUser());
+        return ApiResponse.ok("Search history cleared");
     }
 }

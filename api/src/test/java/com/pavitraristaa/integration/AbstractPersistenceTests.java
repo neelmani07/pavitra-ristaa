@@ -39,8 +39,16 @@ import com.pavitraristaa.connections.dto.InterestResponse;
 import com.pavitraristaa.connections.dto.MatchResponse;
 import com.pavitraristaa.connections.service.InterestService;
 import com.pavitraristaa.connections.service.MatchService;
+import com.pavitraristaa.discovery.dto.CreateSavedSearchRequest;
+import com.pavitraristaa.discovery.dto.DiscoverySearchRequest;
 import com.pavitraristaa.discovery.dto.HomeResponse;
+import com.pavitraristaa.discovery.dto.SavedSearchResponse;
+import com.pavitraristaa.discovery.dto.SearchHistoryResponse;
+import com.pavitraristaa.discovery.dto.UpdateSavedSearchRequest;
 import com.pavitraristaa.discovery.service.DiscoveryService;
+import com.pavitraristaa.discovery.service.RecommendationService;
+import com.pavitraristaa.discovery.service.SavedSearchService;
+import com.pavitraristaa.discovery.service.SearchHistoryService;
 import com.pavitraristaa.favorites.service.FavoriteService;
 import com.pavitraristaa.master.dto.MasterValueResponse;
 import com.pavitraristaa.master.service.MasterDataService;
@@ -85,6 +93,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -125,6 +134,9 @@ abstract class AbstractPersistenceTests {
     @Autowired private AuditLogService auditLogService;
     @Autowired private NotificationService notificationService;
     @Autowired private NotificationSettingService notificationSettingService;
+    @Autowired private RecommendationService recommendationService;
+    @Autowired private SavedSearchService savedSearchService;
+    @Autowired private SearchHistoryService searchHistoryService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -1201,5 +1213,81 @@ abstract class AbstractPersistenceTests {
         notificationService.delete(b, notification.id());
         assertThatThrownBy(() -> notificationService.getOne(b, notification.id()))
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.NOTIFICATION_NOT_FOUND));
+    }
+
+    // --- Discovery add-ons: recommendations, saved searches, search history ---
+
+    @Test
+    void refreshingRecommendationsScoresAndPersistsCandidatesThenListReturnsThem() {
+        AuthenticatedUser self = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser candidateOne = discoverableUser("MALE", 30, "DATING");
+        AuthenticatedUser candidateTwo = discoverableUser("MALE", 33, "DATING");
+
+        assertThat(recommendationService.list(self, null, null)).isEmpty();
+
+        int generated = recommendationService.refresh(self);
+
+        assertThat(generated).isGreaterThanOrEqualTo(2);
+        List<UserSummaryResponse> recommended = recommendationService.list(self, null, null);
+        assertThat(recommended).extracting(UserSummaryResponse::id).contains(candidateOne.uuid(), candidateTwo.uuid());
+        assertThat(recommended).extracting(UserSummaryResponse::id).doesNotContain(self.uuid());
+
+        // Refreshing again replaces the prior snapshot rather than accumulating duplicates.
+        int regenerated = recommendationService.refresh(self);
+        assertThat(regenerated).isEqualTo(generated);
+        assertThat(countRecommendations(self)).isEqualTo(generated);
+    }
+
+    private long countRecommendations(AuthenticatedUser user) {
+        return jdbcTemplate.queryForObject(
+                "select count(*) from recommendation where user_id = (select id from \"user\" where uuid = ?)",
+                Long.class, user.uuid());
+    }
+
+    @Test
+    void savedSearchCrudRoundTripsAndEnforcesASingleDefaultAndOwnership() {
+        AuthenticatedUser me = userWithProfile();
+        AuthenticatedUser other = userWithProfile();
+
+        SavedSearchResponse first = savedSearchService.create(
+                me, new CreateSavedSearchRequest("Nearby matches", Map.of("cityId", 1), true));
+        assertThat(first.isDefault()).isTrue();
+        assertThat(first.criteria()).containsEntry("cityId", 1);
+
+        SavedSearchResponse second = savedSearchService.create(
+                me, new CreateSavedSearchRequest("Spiritual seekers", Map.of("spiritualCommunity", "Vedanta"), true));
+        assertThat(second.isDefault()).isTrue();
+
+        List<SavedSearchResponse> mine = savedSearchService.list(me);
+        assertThat(mine).hasSize(2);
+        assertThat(mine.stream().filter(SavedSearchResponse::isDefault)).hasSize(1);
+
+        SavedSearchResponse updated = savedSearchService.update(
+                me, first.id(), new UpdateSavedSearchRequest("Renamed search", null, null));
+        assertThat(updated.name()).isEqualTo("Renamed search");
+        assertThat(updated.criteria()).containsEntry("cityId", 1);
+
+        assertThatThrownBy(() -> savedSearchService.update(other, first.id(), new UpdateSavedSearchRequest("hijack", null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SAVED_SEARCH_NOT_FOUND));
+        assertThatThrownBy(() -> savedSearchService.delete(other, first.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SAVED_SEARCH_NOT_FOUND));
+
+        savedSearchService.delete(me, first.id());
+        assertThat(savedSearchService.list(me)).extracting(SavedSearchResponse::id).containsExactly(second.id());
+    }
+
+    @Test
+    void searchingRecordsHistoryAndClearRemovesIt() {
+        AuthenticatedUser me = discoverableUser("FEMALE", 28, "DATING");
+        discoverableUser("MALE", 30, "DATING");
+
+        discoveryService.search(me, new DiscoverySearchRequest(null, List.of("DATING"), 25, 40, null, null, null, null, null, null));
+
+        List<SearchHistoryResponse> history = searchHistoryService.list(me, null, null);
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).criteria()).containsEntry("minAge", 25);
+
+        searchHistoryService.clear(me);
+        assertThat(searchHistoryService.list(me, null, null)).isEmpty();
     }
 }
