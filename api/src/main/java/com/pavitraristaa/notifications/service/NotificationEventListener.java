@@ -1,5 +1,6 @@
 package com.pavitraristaa.notifications.service;
 
+import com.pavitraristaa.admin.event.AppealResolvedEvent;
 import com.pavitraristaa.admin.event.ReportResolvedEvent;
 import com.pavitraristaa.admin.event.SupportTicketResolvedEvent;
 import com.pavitraristaa.admin.event.UserStatusChangedEvent;
@@ -96,5 +97,19 @@ class NotificationEventListener {
         notificationPublisher.notify(
                 event.ticketOwner(), NotificationType.SUPPORT_TICKET_RESOLVED,
                 "Support ticket resolved", "Your support ticket has been resolved.", null, null);
+    }
+
+    @EventListener
+    @Transactional
+    public void onAppealResolved(AppealResolvedEvent event) {
+        if (event.approved()) {
+            notificationPublisher.notify(
+                    event.appellant(), NotificationType.APPEAL_RESOLVED,
+                    "Appeal approved", "Your appeal has been approved.", null, null);
+        } else {
+            notificationPublisher.notify(
+                    event.appellant(), NotificationType.APPEAL_RESOLVED,
+                    "Appeal rejected", "Your appeal was reviewed and was not approved.", null, null);
+        }
     }
 }

@@ -2,12 +2,15 @@ package com.pavitraristaa.discovery.controller;
 
 import com.pavitraristaa.common.api.ApiResponse;
 import com.pavitraristaa.common.security.CurrentUserAccessor;
+import com.pavitraristaa.discovery.dto.CollectionDetailResponse;
+import com.pavitraristaa.discovery.dto.CollectionSummaryResponse;
 import com.pavitraristaa.discovery.dto.CreateSavedSearchRequest;
 import com.pavitraristaa.discovery.dto.DiscoverySearchRequest;
 import com.pavitraristaa.discovery.dto.HomeResponse;
 import com.pavitraristaa.discovery.dto.SavedSearchResponse;
 import com.pavitraristaa.discovery.dto.SearchHistoryResponse;
 import com.pavitraristaa.discovery.dto.UpdateSavedSearchRequest;
+import com.pavitraristaa.discovery.service.DiscoveryCollectionService;
 import com.pavitraristaa.discovery.service.DiscoveryService;
 import com.pavitraristaa.discovery.service.RecommendationService;
 import com.pavitraristaa.discovery.service.SavedSearchService;
@@ -40,6 +43,7 @@ public class DiscoveryController {
     private final RecommendationService recommendationService;
     private final SavedSearchService savedSearchService;
     private final SearchHistoryService searchHistoryService;
+    private final DiscoveryCollectionService discoveryCollectionService;
     private final CurrentUserAccessor currentUserAccessor;
 
     public DiscoveryController(
@@ -47,12 +51,14 @@ public class DiscoveryController {
             RecommendationService recommendationService,
             SavedSearchService savedSearchService,
             SearchHistoryService searchHistoryService,
+            DiscoveryCollectionService discoveryCollectionService,
             CurrentUserAccessor currentUserAccessor
     ) {
         this.discoveryService = discoveryService;
         this.recommendationService = recommendationService;
         this.savedSearchService = savedSearchService;
         this.searchHistoryService = searchHistoryService;
+        this.discoveryCollectionService = discoveryCollectionService;
         this.currentUserAccessor = currentUserAccessor;
     }
 
@@ -169,5 +175,22 @@ public class DiscoveryController {
     public ApiResponse<Void> clearSearchHistory() {
         searchHistoryService.clear(currentUserAccessor.requireUser());
         return ApiResponse.ok("Search history cleared");
+    }
+
+    @GetMapping("/discovery/collections")
+    @Operation(summary = "List discovery collections")
+    public ApiResponse<List<CollectionSummaryResponse>> listCollections() {
+        return ApiResponse.ok(discoveryCollectionService.list(), "Collections");
+    }
+
+    @GetMapping("/discovery/collections/{collectionId}")
+    @Operation(summary = "Get collection details and members")
+    public ApiResponse<CollectionDetailResponse> getCollection(
+            @PathVariable String collectionId,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size
+    ) {
+        return ApiResponse.ok(
+                discoveryCollectionService.getOne(currentUserAccessor.requireUser(), collectionId, page, size), "Collection");
     }
 }

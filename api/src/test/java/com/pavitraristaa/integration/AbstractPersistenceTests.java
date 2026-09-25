@@ -3,6 +3,7 @@ package com.pavitraristaa.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.pavitraristaa.admin.dto.AdminAppealResponse;
 import com.pavitraristaa.admin.dto.AdminModerationResponse;
 import com.pavitraristaa.admin.dto.AdminReportResponse;
 import com.pavitraristaa.admin.dto.AdminSettingResponse;
@@ -13,6 +14,7 @@ import com.pavitraristaa.admin.dto.AssignTicketRequest;
 import com.pavitraristaa.admin.dto.AuditLogResponse;
 import com.pavitraristaa.admin.dto.CreateModerationRequest;
 import com.pavitraristaa.admin.dto.LoginHistoryResponse;
+import com.pavitraristaa.admin.dto.ResolveAppealRequest;
 import com.pavitraristaa.admin.dto.ResolveModerationRequest;
 import com.pavitraristaa.admin.dto.ResolveReportRequest;
 import com.pavitraristaa.admin.dto.ResolveTicketRequest;
@@ -20,6 +22,7 @@ import com.pavitraristaa.admin.dto.SuspendUserRequest;
 import com.pavitraristaa.admin.dto.UpdateSettingRequest;
 import com.pavitraristaa.admin.dto.UpdateUserRolesRequest;
 import com.pavitraristaa.admin.dto.VerificationDecisionRequest;
+import com.pavitraristaa.admin.service.AdminAppealService;
 import com.pavitraristaa.admin.service.AdminModerationService;
 import com.pavitraristaa.admin.service.AdminReportService;
 import com.pavitraristaa.admin.service.AdminSettingService;
@@ -39,12 +42,15 @@ import com.pavitraristaa.connections.dto.InterestResponse;
 import com.pavitraristaa.connections.dto.MatchResponse;
 import com.pavitraristaa.connections.service.InterestService;
 import com.pavitraristaa.connections.service.MatchService;
+import com.pavitraristaa.discovery.dto.CollectionDetailResponse;
+import com.pavitraristaa.discovery.dto.CollectionSummaryResponse;
 import com.pavitraristaa.discovery.dto.CreateSavedSearchRequest;
 import com.pavitraristaa.discovery.dto.DiscoverySearchRequest;
 import com.pavitraristaa.discovery.dto.HomeResponse;
 import com.pavitraristaa.discovery.dto.SavedSearchResponse;
 import com.pavitraristaa.discovery.dto.SearchHistoryResponse;
 import com.pavitraristaa.discovery.dto.UpdateSavedSearchRequest;
+import com.pavitraristaa.discovery.service.DiscoveryCollectionService;
 import com.pavitraristaa.discovery.service.DiscoveryService;
 import com.pavitraristaa.discovery.service.RecommendationService;
 import com.pavitraristaa.discovery.service.SavedSearchService;
@@ -63,6 +69,7 @@ import com.pavitraristaa.notifications.dto.NotificationResponse;
 import com.pavitraristaa.notifications.dto.NotificationSettingResponse;
 import com.pavitraristaa.notifications.dto.NotificationSettingUpdate;
 import com.pavitraristaa.notifications.dto.UpdateNotificationSettingsRequest;
+import com.pavitraristaa.notifications.entity.NotificationType;
 import com.pavitraristaa.notifications.service.NotificationService;
 import com.pavitraristaa.notifications.service.NotificationSettingService;
 import com.pavitraristaa.preference.dto.PartnerPreferenceRequest;
@@ -82,10 +89,13 @@ import com.pavitraristaa.support.dto.SupportTicketResponse;
 import com.pavitraristaa.support.dto.UpdateSupportTicketRequest;
 import com.pavitraristaa.support.service.HelpContentService;
 import com.pavitraristaa.support.service.SupportTicketService;
+import com.pavitraristaa.trust.dto.AppealResponse;
 import com.pavitraristaa.trust.dto.CreateReportRequest;
 import com.pavitraristaa.trust.dto.ReportResponse;
+import com.pavitraristaa.trust.dto.SubmitAppealRequest;
 import com.pavitraristaa.trust.dto.SubmitVerificationRequest;
 import com.pavitraristaa.trust.dto.VerificationStatusResponse;
+import com.pavitraristaa.trust.service.AppealService;
 import com.pavitraristaa.trust.service.BlockService;
 import com.pavitraristaa.trust.service.ReportService;
 import com.pavitraristaa.trust.service.VerificationService;
@@ -137,6 +147,9 @@ abstract class AbstractPersistenceTests {
     @Autowired private RecommendationService recommendationService;
     @Autowired private SavedSearchService savedSearchService;
     @Autowired private SearchHistoryService searchHistoryService;
+    @Autowired private DiscoveryCollectionService discoveryCollectionService;
+    @Autowired private AppealService appealService;
+    @Autowired private AdminAppealService adminAppealService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -1179,7 +1192,7 @@ abstract class AbstractPersistenceTests {
         AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
 
         List<NotificationSettingResponse> defaults = notificationSettingService.get(b);
-        assertThat(defaults).hasSize(8);
+        assertThat(defaults).hasSize(NotificationType.values().length);
         assertThat(defaults).allSatisfy(s -> {
             assertThat(s.inAppEnabled()).isTrue();
             assertThat(s.smsEnabled()).isFalse();
@@ -1289,5 +1302,57 @@ abstract class AbstractPersistenceTests {
 
         searchHistoryService.clear(me);
         assertThat(searchHistoryService.list(me, null, null)).isEmpty();
+    }
+
+    // --- Appeals, and discovery collections ---
+
+    @Test
+    void submittingAnAppealAndAdminApprovingItNotifiesTheAppellant() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser me = userWithProfile();
+
+        AppealResponse submitted = appealService.submit(me, new SubmitAppealRequest("ACCOUNT_SUSPENSION", "I was suspended by mistake"));
+        assertThat(submitted.status()).isEqualTo("OPEN");
+
+        assertThat(adminAppealService.list(null, null, null).items()).extracting(AdminAppealResponse::id).contains(submitted.id());
+        assertThat(adminAppealService.getOne(submitted.id()).status()).isEqualTo("OPEN");
+
+        AdminAppealResponse resolved = adminAppealService.resolve(
+                admin, submitted.id(), new ResolveAppealRequest("APPROVED", "Confirmed - reinstating the account"));
+        assertThat(resolved.status()).isEqualTo("APPROVED");
+
+        assertThat(notificationService.list(me, "APPEAL_RESOLVED", null, null, null)).hasSize(1);
+
+        assertThatThrownBy(() -> adminAppealService.resolve(admin, submitted.id(), new ResolveAppealRequest("REJECTED", null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void appealResolutionRejectsAnUnknownOrOpenStatusValue() {
+        AuthenticatedUser admin = principalFor(newUser());
+        AuthenticatedUser me = userWithProfile();
+        AppealResponse submitted = appealService.submit(me, new SubmitAppealRequest("OTHER", "Details"));
+
+        assertThatThrownBy(() -> adminAppealService.resolve(admin, submitted.id(), new ResolveAppealRequest("OPEN", null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+        assertThatThrownBy(() -> adminAppealService.resolve(admin, submitted.id(), new ResolveAppealRequest("NOT_A_STATUS", null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void discoveryCollectionsAreSeededAndDetailComputesMembersLiveFromCriteria() {
+        AuthenticatedUser viewer = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser candidate = discoverableUser("MALE", 30, "DATING");
+
+        List<CollectionSummaryResponse> collections = discoveryCollectionService.list();
+        assertThat(collections).extracting(CollectionSummaryResponse::code).contains("new-members");
+
+        CollectionDetailResponse detail = discoveryCollectionService.getOne(viewer, "new-members", null, null);
+        assertThat(detail.code()).isEqualTo("new-members");
+        assertThat(detail.members()).extracting(UserSummaryResponse::id).contains(candidate.uuid());
+        assertThat(detail.members()).extracting(UserSummaryResponse::id).doesNotContain(viewer.uuid());
+
+        assertThatThrownBy(() -> discoveryCollectionService.getOne(viewer, "not-a-real-collection", null, null))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.COLLECTION_NOT_FOUND));
     }
 }

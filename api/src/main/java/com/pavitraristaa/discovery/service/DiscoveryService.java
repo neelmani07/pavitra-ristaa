@@ -90,6 +90,22 @@ public class DiscoveryService {
     public List<UserSummaryResponse> search(AuthenticatedUser principal, DiscoverySearchRequest request) {
         UserAccount self = authService.requireUsable(principal);
         searchHistoryService.record(self, request);
+        return runFilteredSearch(self, request, request.page(), request.size());
+    }
+
+    /**
+     * Runs a DiscoverySearchRequest-shaped set of filters without recording search history - used for
+     * discovery collections, whose criteria is admin-curated content the viewer didn't type in, not a search
+     * they performed. page/size come from the caller (the collection endpoint's own query params) rather than
+     * request's own, since a collection's stored criteria has no page/size of its own.
+     */
+    @Transactional(readOnly = true)
+    public List<UserSummaryResponse> browseCollection(AuthenticatedUser principal, DiscoverySearchRequest criteria, Integer page, Integer size) {
+        UserAccount self = authService.requireUsable(principal);
+        return runFilteredSearch(self, criteria, page, size);
+    }
+
+    private List<UserSummaryResponse> runFilteredSearch(UserAccount self, DiscoverySearchRequest request, Integer page, Integer size) {
         SpiritualSearchFilterRequest spiritual = request.spiritual();
         Specification<UserProfile> spec = combine(
                 baseSpec(self, request.relationshipModes() == null ? List.of() : request.relationshipModes()),
@@ -108,7 +124,7 @@ public class DiscoveryService {
                 spiritual == null ? null
                         : DiscoverySpecifications.spiritualFieldContains(
                                 "anySpiritualProfession", spiritual.anySpiritualProfession()));
-        return runSearch(spec, request.page(), request.size());
+        return runSearch(spec, page, size);
     }
 
     private Specification<UserProfile> baseSpec(UserAccount self, List<String> modeCodes) {
