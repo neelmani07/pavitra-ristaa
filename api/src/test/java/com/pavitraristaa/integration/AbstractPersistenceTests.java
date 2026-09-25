@@ -84,6 +84,19 @@ import com.pavitraristaa.profile.dto.UpdatePhotoRequest;
 import com.pavitraristaa.profile.dto.UpdateProfileRequest;
 import com.pavitraristaa.profile.dto.UserSummaryResponse;
 import com.pavitraristaa.profile.service.ProfileService;
+import com.pavitraristaa.subscriptions.dto.CouponValidationResponse;
+import com.pavitraristaa.subscriptions.dto.InvoiceResponse;
+import com.pavitraristaa.subscriptions.dto.PaymentResponse;
+import com.pavitraristaa.subscriptions.dto.PlanResponse;
+import com.pavitraristaa.subscriptions.dto.StartSubscriptionRequest;
+import com.pavitraristaa.subscriptions.dto.SubscriptionResponse;
+import com.pavitraristaa.subscriptions.dto.UpdateAutoRenewRequest;
+import com.pavitraristaa.subscriptions.dto.ValidateCouponRequest;
+import com.pavitraristaa.subscriptions.service.CouponService;
+import com.pavitraristaa.subscriptions.service.InvoiceService;
+import com.pavitraristaa.subscriptions.service.PaymentService;
+import com.pavitraristaa.subscriptions.service.PlanService;
+import com.pavitraristaa.subscriptions.service.SubscriptionService;
 import com.pavitraristaa.support.dto.CreateSupportTicketRequest;
 import com.pavitraristaa.support.dto.SupportTicketResponse;
 import com.pavitraristaa.support.dto.UpdateSupportTicketRequest;
@@ -150,6 +163,11 @@ abstract class AbstractPersistenceTests {
     @Autowired private DiscoveryCollectionService discoveryCollectionService;
     @Autowired private AppealService appealService;
     @Autowired private AdminAppealService adminAppealService;
+    @Autowired private PlanService planService;
+    @Autowired private SubscriptionService subscriptionService;
+    @Autowired private PaymentService paymentService;
+    @Autowired private InvoiceService invoiceService;
+    @Autowired private CouponService couponService;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     @Test
@@ -1354,5 +1372,127 @@ abstract class AbstractPersistenceTests {
 
         assertThatThrownBy(() -> discoveryCollectionService.getOne(viewer, "not-a-real-collection", null, null))
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.COLLECTION_NOT_FOUND));
+    }
+
+    // --- Subscriptions, payments, invoices, coupons ---
+    // The gateway itself (AutoApprovePaymentGateway) is a stub that always succeeds - see its own class comment
+    // for why. What's under test here is everything around it: the subscription lifecycle, payment/invoice
+    // bookkeeping, coupon discount/redemption, and that a FAILED payment (only reachable here by flipping it
+    // via SQL, since the stub never produces one organically) can actually be retried.
+
+    @Test
+    void plansAreSeededAndPubliclyListed() {
+        List<PlanResponse> plans = planService.list();
+        assertThat(plans).extracting(PlanResponse::code).contains("PREMIUM_MONTHLY", "PREMIUM_QUARTERLY", "PREMIUM_YEARLY");
+
+        PlanResponse monthly = planService.getOne("PREMIUM_MONTHLY");
+        assertThat(monthly.billingPeriod()).isEqualTo("MONTHLY");
+        assertThat(monthly.durationDays()).isEqualTo(30);
+        assertThat(monthly.features()).containsKey("unlimitedInterests");
+
+        assertThatThrownBy(() -> planService.getOne("NOT_A_PLAN"))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.PLAN_NOT_FOUND));
+    }
+
+    @Test
+    void startingASubscriptionChargesInvoicesAndActivatesViaTheStubGatewayAndBlocksASecondCheckout() {
+        AuthenticatedUser me = principalFor(newUser());
+        assertThat(subscriptionService.getCurrent(me)).isNull();
+
+        SubscriptionResponse started = subscriptionService.start(me, new StartSubscriptionRequest("PREMIUM_MONTHLY", null, null));
+        assertThat(started.status()).isEqualTo("ACTIVE");
+        assertThat(started.plan().code()).isEqualTo("PREMIUM_MONTHLY");
+        assertThat(started.autoRenew()).isFalse();
+
+        assertThat(subscriptionService.getCurrent(me).id()).isEqualTo(started.id());
+
+        List<PaymentResponse> payments = paymentService.listMine(me, null, null);
+        assertThat(payments).hasSize(1);
+        assertThat(payments.get(0).status()).isEqualTo("SUCCESS");
+        assertThat(payments.get(0).amount()).isEqualByComparingTo(new BigDecimal("999.00"));
+        assertThat(payments.get(0).subscriptionId()).isEqualTo(started.id());
+
+        List<InvoiceResponse> invoices = invoiceService.listMine(me, null, null);
+        assertThat(invoices).hasSize(1);
+        assertThat(invoices.get(0).status()).isEqualTo("PAID");
+        assertThat(invoices.get(0).totalAmount()).isEqualByComparingTo(new BigDecimal("999.00"));
+
+        assertThat(notificationService.list(me, "PAYMENT_SUCCEEDED", null, null, null)).hasSize(1);
+
+        assertThatThrownBy(() -> subscriptionService.start(me, new StartSubscriptionRequest("PREMIUM_YEARLY", null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void startingWithACouponDiscountsThePaymentAndIncrementsRedemptionCount() {
+        AuthenticatedUser me = principalFor(newUser());
+        int redemptionsBefore = countCouponRedemptions("WELCOME10");
+
+        SubscriptionResponse started = subscriptionService.start(me, new StartSubscriptionRequest("PREMIUM_MONTHLY", "WELCOME10", null));
+
+        assertThat(started.status()).isEqualTo("ACTIVE");
+        PaymentResponse payment = paymentService.listMine(me, null, null).get(0);
+        assertThat(payment.amount()).isEqualByComparingTo(new BigDecimal("899.10")); // 999.00 - 10%
+        assertThat(countCouponRedemptions("WELCOME10")).isEqualTo(redemptionsBefore + 1);
+    }
+
+    private int countCouponRedemptions(String code) {
+        return jdbcTemplate.queryForObject("select redemption_count from coupon where code = ?", Integer.class, code);
+    }
+
+    @Test
+    void couponValidateReportsDiscountForAGoodCodeAndAReasonForABadOne() {
+        BigDecimal price = new BigDecimal("999.00");
+
+        CouponValidationResponse valid = couponService.validate(new ValidateCouponRequest("WELCOME10", "PREMIUM_MONTHLY"), price);
+        assertThat(valid.valid()).isTrue();
+        assertThat(valid.discountedPrice()).isEqualByComparingTo(new BigDecimal("899.10"));
+
+        CouponValidationResponse unknown = couponService.validate(new ValidateCouponRequest("NOT_A_CODE", "PREMIUM_MONTHLY"), price);
+        assertThat(unknown.valid()).isFalse();
+        assertThat(unknown.reason()).isNotBlank();
+    }
+
+    @Test
+    void cancelStopsAutoRenewAndBlocksFurtherAutoRenewChangesAndDoubleCancellation() {
+        AuthenticatedUser me = principalFor(newUser());
+        SubscriptionResponse started = subscriptionService.start(me, new StartSubscriptionRequest("PREMIUM_MONTHLY", null, null));
+
+        SubscriptionResponse withAutoRenew = subscriptionService.setAutoRenew(me, started.id(), new UpdateAutoRenewRequest(true));
+        assertThat(withAutoRenew.autoRenew()).isTrue();
+
+        SubscriptionResponse cancelled = subscriptionService.cancel(me, started.id());
+        assertThat(cancelled.status()).isEqualTo("CANCELLED");
+        assertThat(cancelled.autoRenew()).isFalse();
+
+        assertThatThrownBy(() -> subscriptionService.cancel(me, started.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+        assertThatThrownBy(() -> subscriptionService.setAutoRenew(me, started.id(), new UpdateAutoRenewRequest(true)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SUBSCRIPTION_NOT_ACTIVE));
+
+        AuthenticatedUser other = principalFor(newUser());
+        assertThatThrownBy(() -> subscriptionService.getOne(other, started.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SUBSCRIPTION_NOT_FOUND));
+    }
+
+    @Test
+    void retryOnlyWorksOnAFailedPaymentAndFiresANewSucceededNotification() {
+        AuthenticatedUser me = principalFor(newUser());
+        subscriptionService.start(me, new StartSubscriptionRequest("PREMIUM_MONTHLY", null, null));
+        PaymentResponse succeeded = paymentService.listMine(me, null, null).get(0);
+
+        assertThatThrownBy(() -> paymentService.retry(me, succeeded.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+
+        jdbcTemplate.update("update payment set status = 'FAILED' where uuid = ?", succeeded.id());
+        PaymentResponse retried = paymentService.retry(me, succeeded.id());
+        assertThat(retried.status()).isEqualTo("SUCCESS");
+
+        // Two SUCCESS events total for this user now: the original checkout, and this retry.
+        assertThat(notificationService.list(me, "PAYMENT_SUCCEEDED", null, null, null)).hasSize(2);
+
+        AuthenticatedUser other = principalFor(newUser());
+        assertThatThrownBy(() -> paymentService.getOne(other, succeeded.id()))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.PAYMENT_NOT_FOUND));
     }
 }

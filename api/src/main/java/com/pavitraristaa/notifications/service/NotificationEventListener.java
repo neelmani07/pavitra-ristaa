@@ -11,6 +11,8 @@ import com.pavitraristaa.connections.entity.Match;
 import com.pavitraristaa.connections.event.InterestReceivedEvent;
 import com.pavitraristaa.connections.event.MatchActivatedEvent;
 import com.pavitraristaa.notifications.entity.NotificationType;
+import com.pavitraristaa.subscriptions.event.PaymentFailedEvent;
+import com.pavitraristaa.subscriptions.event.PaymentSucceededEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -111,5 +113,21 @@ class NotificationEventListener {
                     event.appellant(), NotificationType.APPEAL_RESOLVED,
                     "Appeal rejected", "Your appeal was reviewed and was not approved.", null, null);
         }
+    }
+
+    @EventListener
+    @Transactional
+    public void onPaymentSucceeded(PaymentSucceededEvent event) {
+        notificationPublisher.notify(
+                event.user(), NotificationType.PAYMENT_SUCCEEDED, "Payment successful",
+                "Your payment of " + event.amount() + " " + event.currencyCode() + " was successful.", null, null);
+    }
+
+    @EventListener
+    @Transactional
+    public void onPaymentFailed(PaymentFailedEvent event) {
+        notificationPublisher.notify(
+                event.user(), NotificationType.PAYMENT_FAILED, "Payment failed",
+                "Your payment could not be completed. You can retry it from your payment history.", null, null);
     }
 }

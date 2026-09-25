@@ -40,7 +40,8 @@ class ModuleBoundariesTest {
             Map.entry("messaging", Set.of("auth", "connections", "media", "profile", "trust")),
             Map.entry("support", Set.of("auth")),
             Map.entry("admin", Set.of("auth", "profile", "trust", "support")),
-            Map.entry("notifications", Set.of("auth", "connections", "admin"))
+            Map.entry("subscriptions", Set.of("auth")),
+            Map.entry("notifications", Set.of("auth", "connections", "admin", "subscriptions"))
     );
 
     private static final JavaClasses CLASSES = new ClassFileImporter()

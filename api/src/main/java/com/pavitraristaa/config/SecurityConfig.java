@@ -67,6 +67,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/safety-center").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/help").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/legal/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/plans/**").permitAll()
                         // Baseline for every /admin/** path - defense in depth alongside the finer-grained
                         // @PreAuthorize on individual controller methods (some admin actions are ADMIN/SUPER_ADMIN
                         // only; this just guarantees a plain USER can never reach anything under /admin/**).
