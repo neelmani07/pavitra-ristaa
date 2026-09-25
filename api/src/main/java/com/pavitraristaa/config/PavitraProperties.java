@@ -12,6 +12,7 @@ public class PavitraProperties {
     private final Auth auth = new Auth();
     private final Media media = new Media();
     private final Razorpay razorpay = new Razorpay();
+    private final Cors cors = new Cors();
 
     public Media getMedia() {
         return media;
@@ -31,6 +32,10 @@ public class PavitraProperties {
 
     public Razorpay getRazorpay() {
         return razorpay;
+    }
+
+    public Cors getCors() {
+        return cors;
     }
 
     public static class Security {
@@ -328,6 +333,20 @@ public class PavitraProperties {
 
         public void setWebhookSecret(String webhookSecret) {
             this.webhookSecret = webhookSecret;
+        }
+    }
+
+    /** Defaults to common local dev ports (Vite/CRA) so the API is usable out of the box; a deployed frontend's
+     *  real origin must be added via CORS_ALLOWED_ORIGINS - see SecurityConfig's corsConfigurationSource(). */
+    public static class Cors {
+        private List<String> allowedOrigins = List.of("http://localhost:3000", "http://localhost:5173");
+
+        public List<String> getAllowedOrigins() {
+            return allowedOrigins;
+        }
+
+        public void setAllowedOrigins(List<String> allowedOrigins) {
+            this.allowedOrigins = allowedOrigins;
         }
     }
 }

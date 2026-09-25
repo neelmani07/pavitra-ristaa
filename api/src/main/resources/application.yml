@@ -78,3 +78,8 @@ pavitra:
     key-id: ${RAZORPAY_KEY_ID:}
     key-secret: ${RAZORPAY_KEY_SECRET:}
     webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
+  cors:
+    # Comma-separated list of exact origins a browser frontend is served from - no wildcard, since JWTs are
+    # sent as a bearer header rather than a cookie but the allowlist should still stay explicit. Add the
+    # deployed frontend's real origin here once it has one; local dev already covers Vite/CRA's default ports.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}

@@ -7,6 +7,7 @@ import com.pavitraristaa.common.exception.ApiException;
 import com.pavitraristaa.common.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,6 +24,9 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration
@@ -46,10 +50,12 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final ObjectMapper objectMapper;
+    private final PavitraProperties properties;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter, ObjectMapper objectMapper) {
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter, ObjectMapper objectMapper, PavitraProperties properties) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.objectMapper = objectMapper;
+        this.properties = properties;
     }
 
     @Bean
@@ -95,6 +101,27 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
+    }
+
+    /**
+     * Spring Security's .cors(Customizer.withDefaults()) does nothing on its own - it just looks for a
+     * CorsConfigurationSource bean, which didn't exist until now. Without this, every cross-origin request
+     * from a browser frontend (any real web app, since it won't share this API's origin) was silently blocked
+     * by the browser itself before ever reaching a controller. allowCredentials stays false: the JWT travels
+     * as an Authorization header, not a cookie, so there's no session credential for the browser to attach.
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(properties.getCors().getAllowedOrigins());
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        configuration.setAllowCredentials(false);
+        configuration.setMaxAge(java.time.Duration.ofHours(1));
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
     }
 
     private AuthenticationEntryPoint authenticationEntryPoint() {
