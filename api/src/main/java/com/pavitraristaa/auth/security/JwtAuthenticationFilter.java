@@ -60,8 +60,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    /** Package-visible so StompAuthChannelInterceptor (the WebSocket equivalent of this filter) can parse the
+     *  same "roles" claim shape without duplicating it. */
     @SuppressWarnings("unchecked")
-    private Collection<String> extractRoles(Claims claims) {
+    static Collection<String> extractRoles(Claims claims) {
         Object roles = claims.get("roles");
         if (roles instanceof Collection<?> collection) {
             return collection.stream().map(String::valueOf).toList();
@@ -69,7 +71,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return List.of();
     }
 
-    private Long toLong(Object value) {
+    static Long toLong(Object value) {
         if (value instanceof Number number) {
             return number.longValue();
         }

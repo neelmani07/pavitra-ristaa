@@ -30,11 +30,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * REST side of messaging only: conversation/message history and management. Sending a message is WebSocket-only
- * per the API contract (there is no POST .../messages endpoint) and is not implemented - the STOMP destinations
- * are explicitly unfinalized in the project's own docs ("finalize before chat implementation"), so there is
- * nothing yet to build against. A conversation comes into existence automatically when a match is made
- * (see ConversationService's match-event listeners), so message history is empty until sending exists.
+ * REST side of messaging: conversation/message history and management. Sending a message is WebSocket-only per
+ * the API contract (there is no POST .../messages endpoint here on purpose) - see ChatWebSocketController and
+ * WebSocketConfig for the live /ws/chat side. delete/react/markRead below are REST, but broadcast live to any
+ * connected participant exactly the same as the WebSocket actions do - see MessageService's own class comment.
+ * A conversation comes into existence automatically when a match is made (see ConversationService's
+ * match-event listeners).
  */
 @RestController
 @RequestMapping("/api/v1/conversations")

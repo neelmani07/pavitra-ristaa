@@ -63,6 +63,7 @@ import com.pavitraristaa.media.service.MediaService;
 import com.pavitraristaa.messaging.dto.ConversationResponse;
 import com.pavitraristaa.messaging.dto.MessageResponse;
 import com.pavitraristaa.messaging.dto.ReactionRequest;
+import com.pavitraristaa.messaging.dto.SendMessageRequest;
 import com.pavitraristaa.messaging.service.ConversationService;
 import com.pavitraristaa.messaging.service.MessageService;
 import com.pavitraristaa.notifications.dto.NotificationResponse;
@@ -772,6 +773,64 @@ abstract class AbstractPersistenceTests {
         MessageResponse deleted = messageService.getOne(a, conversationId, messageId);
         assertThat(deleted.status()).isEqualTo("DELETED");
         assertThat(deleted.content()).isNull();
+    }
+
+    @Test
+    void sendingAMessagePersistsBroadcastsAndBumpsConversationOrdering() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        InterestResponse sent = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, sent.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+        Instant conversationUpdatedAtBefore = conversationService.getOne(a, conversationId).updatedAt();
+
+        UUID clientMessageId = UUID.randomUUID();
+        MessageResponse response = messageService.send(
+                a, new SendMessageRequest(conversationId, clientMessageId, "TEXT", "Hi Bob!", null, null));
+
+        assertThat(response.content()).isEqualTo("Hi Bob!");
+        assertThat(response.senderUserId()).isEqualTo(a.uuid());
+        assertThat(response.status()).isEqualTo("SENT");
+
+        List<MessageResponse> history = messageService.history(b, conversationId, null, null, null);
+        assertThat(history).extracting(MessageResponse::id).containsExactly(response.id());
+
+        // listMine orders by conversation.updatedAt desc - sending bumps it, same as any other activity.
+        assertThat(conversationService.getOne(a, conversationId).updatedAt()).isAfter(conversationUpdatedAtBefore);
+    }
+
+    @Test
+    void sendingValidatesContentReplyToConversationStateAndBlocks() {
+        AuthenticatedUser a = discoverableUser("FEMALE", 28, "DATING");
+        AuthenticatedUser b = discoverableUser("MALE", 30, "DATING");
+        AuthenticatedUser c = discoverableUser("FEMALE", 27, "DATING");
+        InterestResponse abInterest = interestService.send(a, new CreateInterestRequest(b.uuid(), "DATING", null));
+        interestService.accept(b, abInterest.id());
+        UUID conversationId = conversationService.listMine(a, null, null).get(0).id();
+
+        InterestResponse acInterest = interestService.send(a, new CreateInterestRequest(c.uuid(), "DATING", null));
+        interestService.accept(c, acInterest.id());
+        UUID otherConversationId = conversationService.listMine(a, null, null).stream()
+                .map(ConversationResponse::id).filter(id -> !id.equals(conversationId)).findFirst().orElseThrow();
+        UUID messageInOtherConversation = insertMessage(otherConversationId, a, "Not this conversation");
+
+        assertThatThrownBy(() -> messageService.send(a, new SendMessageRequest(conversationId, UUID.randomUUID(), "TEXT", null, null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+        assertThatThrownBy(() -> messageService.send(a, new SendMessageRequest(conversationId, UUID.randomUUID(), "NOT_A_TYPE", "hi", null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+        assertThatThrownBy(() -> messageService.send(
+                a, new SendMessageRequest(conversationId, UUID.randomUUID(), "TEXT", "hi", messageInOtherConversation, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.MESSAGE_NOT_FOUND));
+
+        // A general block (not the conversation-scoped one, which also closes the conversation) still has to
+        // stop a real-time send - defense in depth, since the two are otherwise independent mechanisms.
+        block(a, b);
+        assertThatThrownBy(() -> messageService.send(a, new SendMessageRequest(conversationId, UUID.randomUUID(), "TEXT", "hi", null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.USER_BLOCKED));
+
+        conversationService.blockParticipant(a, otherConversationId);
+        assertThatThrownBy(() -> messageService.send(a, new SendMessageRequest(otherConversationId, UUID.randomUUID(), "TEXT", "hi", null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
     }
 
     @Test

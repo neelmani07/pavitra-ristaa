@@ -191,12 +191,26 @@ public class ConversationService {
         return conversation;
     }
 
-    private UserAccount otherParticipant(Conversation conversation, UserAccount self) {
+    /** Package-visible so a new message bumps the conversation to the top of listMine()'s ordering. */
+    void touch(Conversation conversation, Instant now) {
+        conversation.setUpdatedAt(now);
+        conversationRepository.save(conversation);
+    }
+
+    /** Package-visible so MessageService can block-check the recipient before a real-time send. */
+    UserAccount otherParticipant(Conversation conversation, UserAccount self) {
         return conversationParticipantRepository.findByConversation(conversation).stream()
                 .map(ConversationParticipant::getUser)
                 .filter(user -> !user.getId().equals(self.getId()))
                 .findFirst()
                 .orElseThrow(() -> new ApiException(ErrorCode.CONVERSATION_NOT_FOUND, "Conversation not found"));
+    }
+
+    /** Package-visible so MessageService knows who to broadcast a real-time event to. */
+    List<UserAccount> participantsOf(Conversation conversation) {
+        return conversationParticipantRepository.findByConversation(conversation).stream()
+                .map(ConversationParticipant::getUser)
+                .toList();
     }
 
     private ConversationStatus parseStatus(String status) {

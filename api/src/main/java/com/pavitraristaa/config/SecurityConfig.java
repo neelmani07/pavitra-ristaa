@@ -77,6 +77,10 @@ public class SecurityConfig {
                         // Server-to-server, verified by HMAC signature inside the handler itself, not a JWT -
                         // see RazorpayWebhookService.
                         .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/razorpay").permitAll()
+                        // The raw HTTP upgrade request can't carry a custom Authorization header from a
+                        // browser - real auth happens on the STOMP CONNECT frame instead, once the socket is
+                        // open. See StompAuthChannelInterceptor.
+                        .requestMatchers("/ws/chat/**").permitAll()
                         // Baseline for every /admin/** path - defense in depth alongside the finer-grained
                         // @PreAuthorize on individual controller methods (some admin actions are ADMIN/SUPER_ADMIN
                         // only; this just guarantees a plain USER can never reach anything under /admin/**).
