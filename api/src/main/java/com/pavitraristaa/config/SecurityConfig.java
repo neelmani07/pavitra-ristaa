@@ -68,6 +68,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/help").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/legal/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/plans/**").permitAll()
+                        // Server-to-server, verified by HMAC signature inside the handler itself, not a JWT -
+                        // see RazorpayWebhookService.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/razorpay").permitAll()
                         // Baseline for every /admin/** path - defense in depth alongside the finer-grained
                         // @PreAuthorize on individual controller methods (some admin actions are ADMIN/SUPER_ADMIN
                         // only; this just guarantees a plain USER can never reach anything under /admin/**).

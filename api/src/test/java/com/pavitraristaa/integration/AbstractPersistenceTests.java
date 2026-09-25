@@ -1475,24 +1475,45 @@ abstract class AbstractPersistenceTests {
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SUBSCRIPTION_NOT_FOUND));
     }
 
+    /**
+     * The stub gateway auto-confirms every checkout, so start() never organically leaves a FAILED payment
+     * behind - that only happens with a real, asynchronous gateway whose first mandate authorization failed.
+     * Builds that state directly (a still-PENDING subscription with a FAILED payment row) to exercise
+     * SubscriptionService.retryFailedCheckout()'s actual guards and its confirm-on-success path.
+     */
     @Test
-    void retryOnlyWorksOnAFailedPaymentAndFiresANewSucceededNotification() {
+    void retryOnlyWorksOnAFailedFirstPaymentOfAStillPendingSubscriptionAndFiresASucceededNotification() {
         AuthenticatedUser me = principalFor(newUser());
-        subscriptionService.start(me, new StartSubscriptionRequest("PREMIUM_MONTHLY", null, null));
-        PaymentResponse succeeded = paymentService.listMine(me, null, null).get(0);
+        UUID failedPaymentId = insertPendingSubscriptionWithFailedFirstPayment(me, "PREMIUM_MONTHLY");
+        assertThat(notificationService.list(me, "PAYMENT_SUCCEEDED", null, null, null)).isEmpty();
 
-        assertThatThrownBy(() -> paymentService.retry(me, succeeded.id()))
+        SubscriptionResponse retried = subscriptionService.retryFailedCheckout(me, failedPaymentId);
+        assertThat(retried.status()).isEqualTo("ACTIVE");
+        assertThat(notificationService.list(me, "PAYMENT_SUCCEEDED", null, null, null)).hasSize(1);
+
+        // The subscription is ACTIVE now, so the same (still-FAILED) payment id can no longer be retried -
+        // once a mandate is authorized, a failed renewal is the provider's own retry schedule, not ours.
+        assertThatThrownBy(() -> subscriptionService.retryFailedCheckout(me, failedPaymentId))
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
 
-        jdbcTemplate.update("update payment set status = 'FAILED' where uuid = ?", succeeded.id());
-        PaymentResponse retried = paymentService.retry(me, succeeded.id());
-        assertThat(retried.status()).isEqualTo("SUCCESS");
-
-        // Two SUCCESS events total for this user now: the original checkout, and this retry.
-        assertThat(notificationService.list(me, "PAYMENT_SUCCEEDED", null, null, null)).hasSize(2);
-
         AuthenticatedUser other = principalFor(newUser());
-        assertThatThrownBy(() -> paymentService.getOne(other, succeeded.id()))
+        assertThatThrownBy(() -> subscriptionService.retryFailedCheckout(other, failedPaymentId))
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.PAYMENT_NOT_FOUND));
+    }
+
+    private UUID insertPendingSubscriptionWithFailedFirstPayment(AuthenticatedUser user, String planCode) {
+        UUID subscriptionUuid = UUID.randomUUID();
+        jdbcTemplate.update(
+                "insert into subscription (uuid, user_id, plan_id, status, starts_at, auto_renew, created_at, updated_at) "
+                        + "values (?, (select id from \"user\" where uuid = ?), (select id from plan where code = ?), "
+                        + "'PENDING', now(), false, now(), now())",
+                subscriptionUuid, user.uuid(), planCode);
+        UUID paymentUuid = UUID.randomUUID();
+        jdbcTemplate.update(
+                "insert into payment (uuid, user_id, subscription_id, provider, amount, currency_code, status, created_at) "
+                        + "values (?, (select id from \"user\" where uuid = ?), (select id from subscription where uuid = ?), "
+                        + "'STUB', 999.00, 'INR', 'FAILED', now())",
+                paymentUuid, user.uuid(), subscriptionUuid);
+        return paymentUuid;
     }
 }

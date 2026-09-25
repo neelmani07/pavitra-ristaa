@@ -8,13 +8,14 @@ import com.pavitraristaa.common.security.AuthenticatedUser;
 import com.pavitraristaa.subscriptions.dto.StartSubscriptionRequest;
 import com.pavitraristaa.subscriptions.dto.SubscriptionResponse;
 import com.pavitraristaa.subscriptions.dto.UpdateAutoRenewRequest;
+import com.pavitraristaa.subscriptions.entity.Payment;
+import com.pavitraristaa.subscriptions.entity.PaymentStatus;
 import com.pavitraristaa.subscriptions.entity.Plan;
 import com.pavitraristaa.subscriptions.entity.Subscription;
 import com.pavitraristaa.subscriptions.entity.SubscriptionStatus;
 import com.pavitraristaa.subscriptions.repository.SubscriptionRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.EnumSet;
 import java.util.Set;
 import java.util.UUID;
@@ -22,9 +23,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owns the subscription lifecycle. Starting a subscription also drives the payment/invoice flow (via
- * PaymentService) in the same transaction, so a subscription is never left PENDING with no corresponding
- * payment attempt - see PaymentService.chargeFor().
+ * Owns the subscription lifecycle and its side of the checkout flow (creating and retrying the provider's
+ * recurring mandate). The record-keeping half of a confirmed/failed charge - Payment/Invoice rows, activating
+ * or extending the subscription - lives in PaymentService, called from here on the stub's auto-confirm path
+ * and from RazorpayWebhookController on the real one; see PaymentService.confirmCharge().
  */
 @Service
 public class SubscriptionService {
@@ -35,6 +37,7 @@ public class SubscriptionService {
     private final SubscriptionRepository subscriptionRepository;
     private final PlanService planService;
     private final CouponService couponService;
+    private final PaymentGateway paymentGateway;
     private final PaymentService paymentService;
 
     public SubscriptionService(
@@ -42,12 +45,14 @@ public class SubscriptionService {
             SubscriptionRepository subscriptionRepository,
             PlanService planService,
             CouponService couponService,
+            PaymentGateway paymentGateway,
             PaymentService paymentService
     ) {
         this.authService = authService;
         this.subscriptionRepository = subscriptionRepository;
         this.planService = planService;
         this.couponService = couponService;
+        this.paymentGateway = paymentGateway;
         this.paymentService = paymentService;
     }
 
@@ -70,9 +75,14 @@ public class SubscriptionService {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "You already have an active or pending subscription");
         }
         Plan plan = planService.requirePlan(request.planCode());
-        BigDecimal amount = request.couponCode() == null || request.couponCode().isBlank()
-                ? plan.getPrice()
-                : couponService.requireAndRedeem(request.couponCode(), plan.getCode(), plan.getPrice());
+        BigDecimal chargeAmount = plan.getPrice();
+        if (request.couponCode() != null && !request.couponCode().isBlank()) {
+            if (!paymentGateway.supportsPerSubscriptionDiscount()) {
+                throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                        "Coupons cannot be applied to recurring subscriptions with the current payment provider yet");
+            }
+            chargeAmount = couponService.requireAndRedeem(request.couponCode(), plan.getCode(), plan.getPrice());
+        }
 
         Instant now = Instant.now();
         Subscription subscription = new Subscription();
@@ -81,17 +91,46 @@ public class SubscriptionService {
         subscription.setPlan(plan);
         subscription.setStatus(SubscriptionStatus.PENDING);
         subscription.setStartsAt(now);
-        subscription.setEndsAt(now.plus(plan.getDurationDays(), ChronoUnit.DAYS));
         subscription.setAutoRenew(false);
         subscription.setCreatedAt(now);
         subscription.setUpdatedAt(now);
         Subscription saved = subscriptionRepository.save(subscription);
 
-        // chargeFor() mutates `saved` to ACTIVE in place on success (same managed entity, same transaction) -
-        // see PaymentService.activatePendingSubscription(). A failed charge leaves it PENDING, matching a real
-        // gateway's "checkout started but payment didn't go through yet" state.
-        paymentService.chargeFor(self, saved, amount, plan.getCurrencyCode(), "Subscription: " + plan.getName());
+        PaymentGateway.SubscriptionCheckout checkout = paymentGateway.createSubscriptionCheckout(self, plan);
+        saved.setProviderSubscriptionId(checkout.providerSubscriptionId());
+        subscriptionRepository.save(saved);
+        if (checkout.autoConfirmed()) {
+            paymentService.confirmCharge(saved, "STUB-PAY-" + UUID.randomUUID(), chargeAmount, plan.getCurrencyCode());
+        }
         return toResponse(saved);
+    }
+
+    /**
+     * The only retry path this API exposes: a subscription whose very first mandate authorization failed
+     * (still PENDING). Once a subscription is ACTIVE, a failed renewal is retried by the provider itself on
+     * its own schedule (Razorpay retries a failed UPI Autopay/e-mandate charge automatically) - there is
+     * nothing for our API to trigger there.
+     */
+    @Transactional
+    public SubscriptionResponse retryFailedCheckout(AuthenticatedUser principal, UUID paymentId) {
+        UserAccount self = authService.requireUsable(principal);
+        Payment payment = paymentService.requireOwned(self, paymentId);
+        if (payment.getStatus() != PaymentStatus.FAILED) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "Only a failed payment can be retried");
+        }
+        Subscription subscription = payment.getSubscription();
+        if (subscription == null || subscription.getStatus() != SubscriptionStatus.PENDING) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "Only a failed first-payment attempt on a still-pending subscription can be retried");
+        }
+        PaymentGateway.SubscriptionCheckout checkout = paymentGateway.createSubscriptionCheckout(self, subscription.getPlan());
+        subscription.setProviderSubscriptionId(checkout.providerSubscriptionId());
+        subscriptionRepository.save(subscription);
+        if (checkout.autoConfirmed()) {
+            paymentService.confirmCharge(
+                    subscription, "STUB-PAY-" + UUID.randomUUID(), subscription.getPlan().getPrice(), subscription.getPlan().getCurrencyCode());
+        }
+        return toResponse(subscription);
     }
 
     @Transactional
@@ -100,6 +139,9 @@ public class SubscriptionService {
         Subscription subscription = requireOwned(self, subscriptionId);
         if (subscription.getStatus() == SubscriptionStatus.CANCELLED || subscription.getStatus() == SubscriptionStatus.EXPIRED) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "This subscription is already " + subscription.getStatus());
+        }
+        if (subscription.getProviderSubscriptionId() != null) {
+            paymentGateway.cancelSubscription(subscription.getProviderSubscriptionId());
         }
         subscription.setStatus(SubscriptionStatus.CANCELLED);
         subscription.setAutoRenew(false);
@@ -129,9 +171,13 @@ public class SubscriptionService {
         return subscription;
     }
 
+    /** checkoutSubscriptionId/checkoutKeyId are only meaningful while a mandate is still awaiting authorization. */
     private SubscriptionResponse toResponse(Subscription subscription) {
+        boolean pending = subscription.getStatus() == SubscriptionStatus.PENDING && subscription.getProviderSubscriptionId() != null;
         return new SubscriptionResponse(
                 subscription.getUuid(), planService.toResponse(subscription.getPlan()), subscription.getStatus().name(),
-                subscription.getStartsAt(), subscription.getEndsAt(), subscription.isAutoRenew());
+                subscription.getStartsAt(), subscription.getEndsAt(), subscription.isAutoRenew(),
+                pending ? subscription.getProviderSubscriptionId() : null,
+                pending ? paymentGateway.checkoutKeyId() : null);
     }
 }

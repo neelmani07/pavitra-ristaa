@@ -1,22 +1,45 @@
 package com.pavitraristaa.subscriptions.service;
 
 import com.pavitraristaa.auth.entity.UserAccount;
-import com.pavitraristaa.subscriptions.entity.Payment;
-import java.math.BigDecimal;
+import com.pavitraristaa.subscriptions.entity.Plan;
 
 /**
- * The seam where a real payment provider (Razorpay, Stripe, ...) plugs in later - deliberately deferred, same
- * as OtpSender/LoggingOtpSender for SMS delivery. Everything around this interface (subscription lifecycle,
- * payment records, invoices, coupons) is fully built and testable today against the stub implementation
- * (AutoApprovePaymentGateway); swapping in a real provider means implementing this interface for real and
- * replacing the @Component wiring - no other class in this module needs to change.
+ * The seam where a real recurring-billing provider (Razorpay Subscriptions today) plugs in - deliberately kept
+ * separate from the rest of the module the same way OtpSender/LoggingOtpSender separates SMS delivery. A real
+ * provider is a mandate-based, asynchronous flow, not a synchronous "charge and get yes/no": creating a
+ * subscription here only sets up the recurring authorization (UPI Autopay / card e-mandate); the actual money
+ * movement is confirmed later, out of band, via a webhook (see RazorpayWebhookController) - or, for the stub
+ * implementation used in dev/test, immediately and synchronously (SubscriptionCheckout.autoConfirmed()).
  */
 public interface PaymentGateway {
 
-    GatewayResult charge(UserAccount user, BigDecimal amount, String currencyCode, String description);
+    /** Recorded in payment.provider - "STUB" or "RAZORPAY", not a config value, so it's always accurate for
+     *  whichever gateway actually processed a given payment. */
+    String providerName();
 
-    GatewayResult retry(Payment payment);
+    /** The public key/identifier a client-side checkout SDK needs, e.g. Razorpay's key_id. Constant for the
+     *  life of the gateway (unlike the per-subscription id in SubscriptionCheckout), so callers can rebuild a
+     *  SubscriptionResponse's checkout fields without holding on to the original SubscriptionCheckout. */
+    String checkoutKeyId();
 
-    record GatewayResult(boolean success, String providerPaymentId, String failureReason) {
+    /**
+     * Sets up the recurring mandate for one billing cycle of `plan` and returns what the client needs to open
+     * the provider's checkout UI to authorize it. No money has moved yet when this returns.
+     */
+    SubscriptionCheckout createSubscriptionCheckout(UserAccount user, Plan plan);
+
+    /** Cancels the mandate at the provider so no further renewal charges occur - our own DB row alone
+     *  cancelling is not enough. No-op-safe to call with an id the provider doesn't recognize. */
+    void cancelSubscription(String providerSubscriptionId);
+
+    /**
+     * Whether this provider can discount an individual subscription's recurring charge amount. Razorpay Plans
+     * fix the amount per plan; per-subscription discounting needs a Razorpay Dashboard-configured "Offer",
+     * which is out of scope for this pass - see CouponService and SubscriptionService.start(). The stub
+     * (AutoApprovePaymentGateway) returns true so the existing coupon-discount tests keep exercising real logic.
+     */
+    boolean supportsPerSubscriptionDiscount();
+
+    record SubscriptionCheckout(String providerSubscriptionId, boolean autoConfirmed) {
     }
 }

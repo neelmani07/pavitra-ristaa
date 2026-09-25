@@ -57,4 +57,8 @@ public class Plan {
 
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
+
+    /** Razorpay's own plan id, created lazily on first checkout and cached here - see RazorpayPaymentGateway. */
+    @Column(name = "provider_plan_id")
+    private String providerPlanId;
 }

@@ -16,4 +16,8 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
     @EntityGraph(attributePaths = {"subscription"})
     Page<Payment> findByUserOrderByCreatedAtDesc(UserAccount user, Pageable pageable);
+
+    /** Webhook idempotency: Razorpay retries webhook delivery, so the same provider_payment_id can arrive more
+     *  than once - this is checked before recording a charge a second time. */
+    boolean existsByProviderAndProviderPaymentId(String provider, String providerPaymentId);
 }

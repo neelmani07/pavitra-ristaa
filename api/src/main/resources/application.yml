@@ -72,3 +72,9 @@ pavitra:
       google-client-id: ${GOOGLE_CLIENT_ID:}
       apple-client-id: ${APPLE_CLIENT_ID:}
       apple-issuer: https://appleid.apple.com
+  razorpay:
+    # Blank key-id (the default everywhere until this is set) is how PaymentGatewayConfig picks the stub
+    # gateway instead of the real one - see its class comment.
+    key-id: ${RAZORPAY_KEY_ID:}
+    key-secret: ${RAZORPAY_KEY_SECRET:}
+    webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}

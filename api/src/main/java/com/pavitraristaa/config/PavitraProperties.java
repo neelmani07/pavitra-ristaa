@@ -11,6 +11,7 @@ public class PavitraProperties {
     private final Otp otp = new Otp();
     private final Auth auth = new Auth();
     private final Media media = new Media();
+    private final Razorpay razorpay = new Razorpay();
 
     public Media getMedia() {
         return media;
@@ -26,6 +27,10 @@ public class PavitraProperties {
 
     public Auth getAuth() {
         return auth;
+    }
+
+    public Razorpay getRazorpay() {
+        return razorpay;
     }
 
     public static class Security {
@@ -292,6 +297,37 @@ public class PavitraProperties {
 
         public void setAllowedMimeTypes(List<String> allowedMimeTypes) {
             this.allowedMimeTypes = allowedMimeTypes;
+        }
+    }
+
+    /** Blank keyId is how PaymentGatewayConfig decides to wire the stub gateway instead - see its class comment. */
+    public static class Razorpay {
+        private String keyId = "";
+        private String keySecret = "";
+        private String webhookSecret = "";
+
+        public String getKeyId() {
+            return keyId;
+        }
+
+        public void setKeyId(String keyId) {
+            this.keyId = keyId;
+        }
+
+        public String getKeySecret() {
+            return keySecret;
+        }
+
+        public void setKeySecret(String keySecret) {
+            this.keySecret = keySecret;
+        }
+
+        public String getWebhookSecret() {
+            return webhookSecret;
+        }
+
+        public void setWebhookSecret(String webhookSecret) {
+            this.webhookSecret = webhookSecret;
         }
     }
 }

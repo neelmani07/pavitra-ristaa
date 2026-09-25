@@ -61,4 +61,9 @@ public class Subscription {
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /** The recurring mandate id at the provider (e.g. Razorpay's "sub_..."). Null for a stub-gateway
+     *  subscription (dev/test, no real provider configured) - see PaymentGateway.SubscriptionCheckout. */
+    @Column(name = "provider_subscription_id")
+    private String providerSubscriptionId;
 }

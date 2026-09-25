@@ -3,7 +3,9 @@ package com.pavitraristaa.subscriptions.controller;
 import com.pavitraristaa.common.api.ApiResponse;
 import com.pavitraristaa.common.security.CurrentUserAccessor;
 import com.pavitraristaa.subscriptions.dto.PaymentResponse;
+import com.pavitraristaa.subscriptions.dto.SubscriptionResponse;
 import com.pavitraristaa.subscriptions.service.PaymentService;
+import com.pavitraristaa.subscriptions.service.SubscriptionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,10 +25,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class PaymentController {
 
     private final PaymentService paymentService;
+    private final SubscriptionService subscriptionService;
     private final CurrentUserAccessor currentUserAccessor;
 
-    public PaymentController(PaymentService paymentService, CurrentUserAccessor currentUserAccessor) {
+    public PaymentController(PaymentService paymentService, SubscriptionService subscriptionService, CurrentUserAccessor currentUserAccessor) {
         this.paymentService = paymentService;
+        this.subscriptionService = subscriptionService;
         this.currentUserAccessor = currentUserAccessor;
     }
 
@@ -44,8 +48,9 @@ public class PaymentController {
     }
 
     @PostMapping("/{paymentId}/retry")
-    @Operation(summary = "Retry failed payment")
-    public ApiResponse<PaymentResponse> retry(@PathVariable UUID paymentId) {
-        return ApiResponse.ok(paymentService.retry(currentUserAccessor.requireUser(), paymentId), "Payment retried");
+    @Operation(summary = "Retry failed payment - only a failed first-payment attempt on a still-pending "
+            + "subscription; returns a fresh checkout session to complete")
+    public ApiResponse<SubscriptionResponse> retry(@PathVariable UUID paymentId) {
+        return ApiResponse.ok(subscriptionService.retryFailedCheckout(currentUserAccessor.requireUser(), paymentId), "Checkout retried");
     }
 }

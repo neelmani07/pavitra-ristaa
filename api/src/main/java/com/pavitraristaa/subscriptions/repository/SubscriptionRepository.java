@@ -16,5 +16,8 @@ public interface SubscriptionRepository extends JpaRepository<Subscription, Long
     @EntityGraph(attributePaths = {"plan", "user"})
     Optional<Subscription> findFirstByUserOrderByCreatedAtDesc(UserAccount user);
 
+    @EntityGraph(attributePaths = {"plan", "user"})
+    Optional<Subscription> findByProviderSubscriptionId(String providerSubscriptionId);
+
     boolean existsByUserAndStatusIn(UserAccount user, java.util.Collection<SubscriptionStatus> statuses);
 }
