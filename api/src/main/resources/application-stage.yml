@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  jpa:
+    properties:
+      hibernate:
+        format_sql: false
+
+pavitra:
+  security:
+    jwt:
+      secret: ${JWT_SECRET}
+
+# Deliberately separate from application-prod.yml, not layered on top of it, so a change made here for the
+# shared staging environment (FE integration, active debugging) can never leak into what prod actually runs -
+# see the deploy notes in docs/decisions/ for the full staging-vs-prod split (Neon project, Razorpay/MSG91 keys,
+# CORS origin all differ per environment via env vars, not via this file inheriting from prod's).
+logging:
+  level:
+    root: INFO
+    com.pavitraristaa: DEBUG
