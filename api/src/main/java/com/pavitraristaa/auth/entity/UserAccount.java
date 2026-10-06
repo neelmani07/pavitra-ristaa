@@ -48,6 +48,9 @@ public class UserAccount {
     @Column(name = "mobile_verified", nullable = false)
     private boolean mobileVerified;
 
+    @Column(name = "referral_code", length = 64)
+    private String referralCode;
+
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 

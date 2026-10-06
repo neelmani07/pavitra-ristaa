@@ -59,8 +59,9 @@ paths:
                   format: password
                 referralCode:
                   type: string
-                inviteCode:
-                  type: string
+                  maxLength: 64
+                  pattern: '^[A-Za-z0-9_-]*$'
+                  description: Optional. Stored upper-cased on the user; blank means none. There is no separate inviteCode.
                 acceptedTerms:
                   type: boolean
                 acceptedPrivacyPolicy:
@@ -1015,6 +1016,15 @@ paths:
                   type: integer
                 cityId:
                   type: integer
+                country:
+                  type: string
+                  description: Country name (or code). Wins over countryId. Created on first use if new.
+                state:
+                  type: string
+                  description: State name, looked up under the country. Wins over stateId. Created on first use if new.
+                city:
+                  type: string
+                  description: City name, looked up under the state. Wins over cityId. Created on first use if new.
       responses:
         '200':
           description: Successful response
@@ -1206,6 +1216,28 @@ paths:
           application/json:
             schema:
               type: object
+              properties:
+                occupationId:
+                  type: integer
+                jobTitle:
+                  type: string
+                companyName:
+                  type: string
+                industryId:
+                  type: integer
+                workLocationCityId:
+                  type: integer
+                workLocationCity:
+                  type: string
+                  description: City name. Wins over workLocationCityId. Created on first use if new.
+                experienceYears:
+                  type: number
+                isEmployed:
+                  type: boolean
+                linkedinUrl:
+                  type: string
+                  nullable: true
+                  description: LinkedIn profile link (https://www.linkedin.com/in/...). Returned only to the profile owner.
               additionalProperties: true
       responses:
         '200':
@@ -1972,6 +2004,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiErrorResponse'
+  /meta/options:
+    get:
+      summary: All dropdown options and fixed enum values in one call
+      description: >-
+        Public and cacheable. enums = fixed string sets the API accepts (otpPurposes, devicePlatforms, photoTypes,
+        photoVisibilities). masterData = admin-managed lists keyed by category code (country/state/city are not
+        included - send those as plain names). customValueCategories = categories where a value outside the list is
+        accepted (SPIRITUAL_COMMUNITY).
+      tags:
+      - Meta
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
   /master-data/categories:
     get:
       summary: List master-data categories
@@ -6635,6 +6684,7 @@ components:
         spiritualCommunity:
           type: string
           nullable: true
+          description: A name from GET /meta/options masterData.SPIRITUAL_COMMUNITY, or any other text (kept for review).
         spiritualInterests:
           type: string
           nullable: true

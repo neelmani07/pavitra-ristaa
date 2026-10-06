@@ -13,6 +13,8 @@ import com.pavitraristaa.common.exception.ApiException;
 import com.pavitraristaa.common.exception.ErrorCode;
 import com.pavitraristaa.common.security.AuthenticatedUser;
 import com.pavitraristaa.config.PavitraProperties;
+import com.pavitraristaa.master.service.GeographyResolver;
+import com.pavitraristaa.master.service.MasterNameResolver;
 import com.pavitraristaa.master.service.MasterValueResolver;
 import com.pavitraristaa.media.service.MediaUrlResolver;
 import com.pavitraristaa.media.repository.MediaFileRepository;
@@ -43,6 +45,8 @@ class ProfileServiceTest {
     @Mock private UserRelationshipModeRepository userRelationshipModeRepository;
     @Mock private MediaFileRepository mediaFileRepository;
     @Mock private MasterValueResolver masterValueResolver;
+    @Mock private GeographyResolver geographyResolver;
+    @Mock private MasterNameResolver masterNameResolver;
     @Mock private MediaUrlResolver mediaUrlResolver;
 
     private ProfileService profileService;
@@ -58,6 +62,8 @@ class ProfileServiceTest {
                 userRelationshipModeRepository,
                 mediaFileRepository,
                 masterValueResolver,
+                geographyResolver,
+                masterNameResolver,
                 new ProfileMapper(mediaUrlResolver),
                 new PavitraProperties()
         );
@@ -85,6 +91,9 @@ class ProfileServiceTest {
                 "About me",
                 null,
                 null,
+                null,
+                null,
+                null,
                 null
         ));
 
@@ -107,6 +116,9 @@ class ProfileServiceTest {
                 null,
                 LocalDate.now().minusYears(16),
                 "FEMALE",
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,

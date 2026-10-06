@@ -29,6 +29,7 @@ class ModuleBoundariesTest {
     private static final Map<String, Set<String>> ALLOWED_DEPENDENCIES = Map.ofEntries(
             Map.entry("auth", Set.of()),
             Map.entry("master", Set.of()),
+            Map.entry("meta", Set.of("auth", "master", "profile")),
             Map.entry("relationship", Set.of("auth")),
             Map.entry("media", Set.of("auth")),
             Map.entry("profile", Set.of("auth", "master", "media", "relationship")),

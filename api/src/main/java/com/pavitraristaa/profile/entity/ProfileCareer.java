@@ -54,4 +54,7 @@ public class ProfileCareer {
 
     @Column(name = "is_employed", nullable = false)
     private boolean employed = true;
+
+    @Column(name = "linkedin_url", length = 255)
+    private String linkedinUrl;
 }

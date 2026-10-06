@@ -7,6 +7,8 @@ import com.pavitraristaa.common.exception.ErrorCode;
 import com.pavitraristaa.common.security.AuthenticatedUser;
 import com.pavitraristaa.config.PavitraProperties;
 import com.pavitraristaa.master.entity.MasterValue;
+import com.pavitraristaa.master.service.GeographyResolver;
+import com.pavitraristaa.master.service.MasterNameResolver;
 import com.pavitraristaa.master.service.MasterValueResolver;
 import com.pavitraristaa.media.entity.MediaFile;
 import com.pavitraristaa.media.entity.MediaStatus;
@@ -59,6 +61,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -71,6 +74,8 @@ public class ProfileService {
     private final UserRelationshipModeRepository userRelationshipModeRepository;
     private final MediaFileRepository mediaFileRepository;
     private final MasterValueResolver masterValueResolver;
+    private final GeographyResolver geographyResolver;
+    private final MasterNameResolver masterNameResolver;
     private final ProfileMapper profileMapper;
     private final PavitraProperties properties;
 
@@ -81,6 +86,8 @@ public class ProfileService {
             UserRelationshipModeRepository userRelationshipModeRepository,
             MediaFileRepository mediaFileRepository,
             MasterValueResolver masterValueResolver,
+            GeographyResolver geographyResolver,
+            MasterNameResolver masterNameResolver,
             ProfileMapper profileMapper,
             PavitraProperties properties
     ) {
@@ -90,6 +97,8 @@ public class ProfileService {
         this.userRelationshipModeRepository = userRelationshipModeRepository;
         this.mediaFileRepository = mediaFileRepository;
         this.masterValueResolver = masterValueResolver;
+        this.geographyResolver = geographyResolver;
+        this.masterNameResolver = masterNameResolver;
         this.profileMapper = profileMapper;
         this.properties = properties;
     }
@@ -137,12 +146,17 @@ public class ProfileService {
 
     @Transactional(readOnly = true)
     public Map<String, Object> getCareer(AuthenticatedUser principal) {
-        return profileMapper.career(requireMine(authService.requireUsable(principal)).getCareer());
+        return profileMapper.career(requireMine(authService.requireUsable(principal)).getCareer(), true);
     }
 
     @Transactional
     public Map<String, Object> updateCareer(AuthenticatedUser principal, UpdateCareerRequest request) {
         UserProfile profile = requireMine(authService.requireUsable(principal));
+        // Resolved up front for the same reason as in updateSpiritual: the lookup can flush a half-built entity.
+        MasterValue workLocationCity = blank(request.workLocationCity())
+                ? masterValueResolver.optionalInCategory(request.workLocationCityId(), "CITY")
+                : geographyResolver.city(request.workLocationCity(), null, null);
+        String linkedinUrl = normalizeLinkedinUrl(request.linkedinUrl());
         ProfileCareer career = profile.getCareer();
         if (career == null) {
             career = new ProfileCareer();
@@ -153,13 +167,14 @@ public class ProfileService {
         career.setJobTitle(request.jobTitle());
         career.setCompanyName(request.companyName());
         career.setIndustry(masterValueResolver.optionalInCategory(request.industryId(), "INDUSTRY"));
-        career.setWorkLocationCity(masterValueResolver.optionalInCategory(request.workLocationCityId(), "CITY"));
+        career.setWorkLocationCity(workLocationCity);
+        career.setLinkedinUrl(linkedinUrl);
         career.setExperienceYears(request.experienceYears());
         if (request.employed() != null) {
             career.setEmployed(request.employed());
         }
         refreshCompletion(profile);
-        return profileMapper.career(userProfileRepository.save(profile).getCareer());
+        return profileMapper.career(userProfileRepository.save(profile).getCareer(), true);
     }
 
     @Transactional(readOnly = true)
@@ -217,6 +232,10 @@ public class ProfileService {
     @Transactional
     public SpiritualProfileResponse updateSpiritual(AuthenticatedUser principal, UpdateSpiritualProfileRequest request) {
         UserProfile profile = requireMine(authService.requireUsable(principal));
+        // Resolved before the entity below is created: this runs a query, and a query auto-flushes whatever is
+        // pending - including a half-built SpiritualProfile whose NOT NULL columns are not filled in yet.
+        MasterValue community = masterNameResolver.findOrCreate(
+                "SPIRITUAL_COMMUNITY", request.spiritualCommunity(), "spiritualCommunity", false, Map.of());
         Instant now = Instant.now();
         SpiritualProfile spiritual = profile.getSpiritualProfile();
         if (spiritual == null) {
@@ -225,7 +244,10 @@ public class ProfileService {
             spiritual.setCreatedAt(now);
             profile.setSpiritualProfile(spiritual);
         }
-        spiritual.setSpiritualCommunity(request.spiritualCommunity());
+        // A listed community resolves to its canonical name; anything else the user typed is kept as they typed it
+        // and also recorded as an inactive master value, so it can be reviewed and promoted into the dropdown
+        // without ever appearing there on its own (see MasterNameResolver).
+        spiritual.setSpiritualCommunity(community == null ? null : community.getName());
         spiritual.setSpiritualInterests(request.spiritualInterests());
         spiritual.setPractices(request.practices());
         spiritual.setAnySpiritualProfession(request.anySpiritualProfession());
@@ -466,16 +488,75 @@ public class ProfileService {
         if (request.aboutMe() != null) {
             profile.setAboutMe(blank(request.aboutMe()) ? null : request.aboutMe());
         }
-        if (request.countryId() != null) {
-            profile.setCountry(masterValueResolver.requireInCategory(request.countryId(), "COUNTRY"));
-        }
-        if (request.stateId() != null) {
-            profile.setState(masterValueResolver.requireInCategory(request.stateId(), "STATE"));
-        }
-        if (request.cityId() != null) {
-            profile.setCity(masterValueResolver.requireInCategory(request.cityId(), "CITY"));
-        }
+        applyLocation(profile, request);
         profile.setUpdatedAt(Instant.now());
+    }
+
+    /**
+     * Each level is taken from the name if one was sent, else from the id. Because a state belongs to a country and
+     * a city to a state, moving to a different country without saying which state/city drops the old ones rather
+     * than leaving, say, a Maharashtra city under a new country.
+     */
+    private void applyLocation(UserProfile profile, UpdateProfileRequest request) {
+        MasterValue country = blank(request.country())
+                ? masterValueResolver.optionalInCategory(request.countryId(), "COUNTRY")
+                : geographyResolver.country(request.country());
+        boolean countryChanged = country != null && !sameValue(country, profile.getCountry());
+        if (country != null) {
+            profile.setCountry(country);
+        }
+
+        MasterValue state = blank(request.state())
+                ? masterValueResolver.optionalInCategory(request.stateId(), "STATE")
+                : geographyResolver.state(request.state(), profile.getCountry());
+        boolean stateChanged = state != null ? !sameValue(state, profile.getState()) : countryChanged;
+        if (state != null) {
+            profile.setState(state);
+        } else if (countryChanged) {
+            profile.setState(null);
+        }
+
+        MasterValue city = blank(request.city())
+                ? masterValueResolver.optionalInCategory(request.cityId(), "CITY")
+                : geographyResolver.city(request.city(), profile.getState(), profile.getCountry());
+        if (city != null) {
+            profile.setCity(city);
+        } else if (stateChanged) {
+            profile.setCity(null);
+        }
+    }
+
+    private static boolean sameValue(MasterValue a, MasterValue b) {
+        return b != null && a.getId().equals(b.getId());
+    }
+
+    // https://www.linkedin.com/in/some-handle, optionally with a country subdomain (in., uk.) and a trailing slash.
+    private static final Pattern LINKEDIN_PROFILE =
+            Pattern.compile("^https://([a-z]{2,3}\\.)?linkedin\\.com/in/[\\p{L}\\p{N}_%.-]{3,100}/?$", Pattern.CASE_INSENSITIVE);
+
+    /** Accepts a pasted link with or without the scheme and with tracking parameters; stores the clean profile URL. */
+    static String normalizeLinkedinUrl(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String url = raw.trim();
+        int cut = url.indexOf('?') >= 0 ? url.indexOf('?') : url.indexOf('#');
+        if (cut >= 0) {
+            url = url.substring(0, cut);
+        }
+        if (url.regionMatches(true, 0, "http://", 0, 7)) {
+            url = "https://" + url.substring(7);
+        } else if (!url.contains("://")) {
+            url = "https://" + url;
+        }
+        if (!LINKEDIN_PROFILE.matcher(url).matches()) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "linkedinUrl must be a LinkedIn profile link like https://www.linkedin.com/in/your-name",
+                    Map.of("field", "linkedinUrl")
+            );
+        }
+        return url;
     }
 
     private void validateAge(LocalDate dateOfBirth) {

@@ -58,7 +58,7 @@ public class ProfileMapper {
                 location(profile),
                 relationshipModes,
                 education(profile.getEducation()),
-                career(profile.getCareer()),
+                career(profile.getCareer(), owner),
                 family(profile.getFamily()),
                 lifestyle(profile.getLifestyle()),
                 languages(profile.getLanguages()),
@@ -120,7 +120,8 @@ public class ProfileMapper {
         return map;
     }
 
-    public Map<String, Object> career(ProfileCareer career) {
+    /** The LinkedIn URL is identifying contact information, so only the owner gets it back. */
+    public Map<String, Object> career(ProfileCareer career, boolean owner) {
         if (career == null) {
             return null;
         }
@@ -132,6 +133,9 @@ public class ProfileMapper {
         map.put("workLocationCity", master(career.getWorkLocationCity()));
         map.put("experienceYears", career.getExperienceYears());
         map.put("isEmployed", career.isEmployed());
+        if (owner) {
+            map.put("linkedinUrl", career.getLinkedinUrl());
+        }
         return map;
     }
 

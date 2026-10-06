@@ -9,7 +9,11 @@ public record UpdateCareerRequest(
         String companyName,
         Long industryId,
         Long workLocationCityId,
+        /** Plain-name alternative to workLocationCityId; wins over it when both are sent. */
+        String workLocationCity,
         BigDecimal experienceYears,
-        @JsonProperty("isEmployed") Boolean employed
+        @JsonProperty("isEmployed") Boolean employed,
+        /** https://www.linkedin.com/in/... Owner-only: never returned to anyone else viewing the profile. */
+        String linkedinUrl
 ) {
 }

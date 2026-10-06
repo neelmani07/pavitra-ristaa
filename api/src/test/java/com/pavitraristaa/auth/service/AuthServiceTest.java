@@ -88,14 +88,16 @@ class AuthServiceTest {
                 "ada@example.com",
                 null,
                 "password1",
-                null,
-                null,
+                "  friend-42 ",
                 true,
                 true
         ));
 
         assertThat(response.accountStatus()).isEqualTo("PENDING_VERIFICATION");
         assertThat(response.verificationRequired()).isTrue();
+        ArgumentCaptor<UserAccount> saved = ArgumentCaptor.forClass(UserAccount.class);
+        verify(userAccountRepository).save(saved.capture());
+        assertThat(saved.getValue().getReferralCode()).isEqualTo("FRIEND-42");
         verify(otpService).issueNumericOtp(any(UserAccount.class), eq("ada@example.com"), eq(OtpPurpose.REGISTER));
         verify(userRoleRepository).save(any());
     }
@@ -103,7 +105,7 @@ class AuthServiceTest {
     @Test
     void registerRejectsMissingTerms() {
         assertThatThrownBy(() -> authService.register(new RegisterRequest(
-                "ada@example.com", null, "password1", null, null, true, false
+                "ada@example.com", null, "password1", null, true, false
         )))
                 .isInstanceOf(ApiException.class)
                 .extracting(exception -> ((ApiException) exception).getErrorCode())

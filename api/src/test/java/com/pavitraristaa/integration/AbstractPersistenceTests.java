@@ -30,6 +30,8 @@ import com.pavitraristaa.admin.service.AdminSupportService;
 import com.pavitraristaa.admin.service.AdminUserService;
 import com.pavitraristaa.admin.service.AdminVerificationService;
 import com.pavitraristaa.admin.service.AuditLogService;
+import com.pavitraristaa.auth.dto.RegisterRequest;
+import com.pavitraristaa.auth.service.AuthService;
 import com.pavitraristaa.auth.entity.AccountStatus;
 import com.pavitraristaa.auth.entity.UserAccount;
 import com.pavitraristaa.auth.repository.UserAccountRepository;
@@ -58,6 +60,8 @@ import com.pavitraristaa.discovery.service.SearchHistoryService;
 import com.pavitraristaa.favorites.service.FavoriteService;
 import com.pavitraristaa.master.dto.MasterValueResponse;
 import com.pavitraristaa.master.service.MasterDataService;
+import com.pavitraristaa.meta.dto.OptionsResponse;
+import com.pavitraristaa.meta.service.OptionsService;
 import com.pavitraristaa.media.dto.CompleteUploadRequest;
 import com.pavitraristaa.media.service.MediaService;
 import com.pavitraristaa.messaging.dto.ConversationResponse;
@@ -78,11 +82,14 @@ import com.pavitraristaa.preference.dto.PartnerPreferenceResponse;
 import com.pavitraristaa.preference.dto.PreferenceValueRequest;
 import com.pavitraristaa.preference.service.PartnerPreferenceService;
 import com.pavitraristaa.profile.dto.LanguageItemRequest;
+import com.pavitraristaa.profile.dto.ProfileResponse;
 import com.pavitraristaa.profile.dto.ReplaceHobbiesRequest;
 import com.pavitraristaa.profile.dto.ReplaceInterestsRequest;
 import com.pavitraristaa.profile.dto.ReplaceLanguagesRequest;
+import com.pavitraristaa.profile.dto.UpdateCareerRequest;
 import com.pavitraristaa.profile.dto.UpdatePhotoRequest;
 import com.pavitraristaa.profile.dto.UpdateProfileRequest;
+import com.pavitraristaa.profile.dto.UpdateSpiritualProfileRequest;
 import com.pavitraristaa.profile.dto.UserSummaryResponse;
 import com.pavitraristaa.profile.service.ProfileService;
 import com.pavitraristaa.subscriptions.dto.CouponValidationResponse;
@@ -134,6 +141,8 @@ import org.springframework.test.context.ActiveProfiles;
 abstract class AbstractPersistenceTests {
 
     @Autowired private UserAccountRepository userAccountRepository;
+    @Autowired private AuthService authService;
+    @Autowired private OptionsService optionsService;
     @Autowired private ProfileService profileService;
     @Autowired private PartnerPreferenceService partnerPreferenceService;
     @Autowired private MasterDataService masterDataService;
@@ -347,6 +356,147 @@ abstract class AbstractPersistenceTests {
         assertThat(profileService.getPublic(userA, userAProfileId).id()).isEqualTo(userAProfileId);
     }
 
+    // --- Referral code, LinkedIn, location by name, spiritual communities, options ---
+
+    @Test
+    void registerStoresTheReferralCodeUpperCasedAndTreatsABlankOneAsNone() {
+        String withCode = "ref-" + UUID.randomUUID() + "@example.test";
+        String withBlank = "ref-" + UUID.randomUUID() + "@example.test";
+
+        authService.register(new RegisterRequest(withCode, null, "password1", " friend-42 ", true, true));
+        authService.register(new RegisterRequest(withBlank, null, "password1", "   ", true, true));
+
+        assertThat(jdbcTemplate.queryForObject(
+                "select referral_code from \"user\" where email = ?", String.class, withCode)).isEqualTo("FRIEND-42");
+        assertThat(jdbcTemplate.queryForObject(
+                "select referral_code from \"user\" where email = ?", String.class, withBlank)).isNull();
+    }
+
+    @Test
+    void linkedinUrlIsValidatedCleanedAndOnlyEverReturnedToTheOwner() {
+        AuthenticatedUser owner = userWithProfile();
+        AuthenticatedUser stranger = userWithProfile();
+
+        Map<String, Object> saved = profileService.updateCareer(
+                owner, career("linkedin.com/in/asha-rao?utm_source=share_via"));
+        activateProfile(owner);
+
+        assertThat(saved).containsEntry("linkedinUrl", "https://linkedin.com/in/asha-rao");
+        assertThat(profileService.getMine(owner).career()).containsEntry("linkedinUrl", "https://linkedin.com/in/asha-rao");
+        assertThat(profileService.getPublic(stranger, owner.uuid()).career())
+                .containsEntry("jobTitle", "Engineer")
+                .doesNotContainKey("linkedinUrl");
+
+        for (String bad : List.of("https://example.com/in/asha-rao", "https://www.linkedin.com/company/acme", "not a url")) {
+            assertThatThrownBy(() -> profileService.updateCareer(owner, career(bad)))
+                    .isInstanceOfSatisfying(ApiException.class,
+                            e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+        }
+        // Sending none clears it, like every other field in this replace-style update.
+        assertThat(profileService.updateCareer(owner, career(null)).get("linkedinUrl")).isNull();
+    }
+
+    @Test
+    void locationNamesResolveToSeededRowsAndNewOnesAreCreatedOnceUnderTheirParent() {
+        AuthenticatedUser me = userWithProfile();
+
+        Map<String, Object> seeded = profileService.updateCore(me, location("india", "MAHARASHTRA", "pune")).location();
+        assertThat(code(seeded, "country")).isEqualTo("IN");
+        assertThat(code(seeded, "state")).isEqualTo("IN-MH");
+        assertThat(code(seeded, "city")).isEqualTo("PUNE");
+
+        long geographyRows = geographyRowCount();
+        Map<String, Object> created = profileService.updateCore(me, location("Testland", "Northern Province", "Testville")).location();
+        assertThat(geographyRowCount()).isEqualTo(geographyRows + 3);
+        assertThat(code(created, "city")).isEqualTo("TESTLAND-NORTHERN_PROVINCE-TESTVILLE");
+
+        // The same names again reuse the rows rather than adding more.
+        profileService.updateCore(me, location("TESTLAND", "northern province", "testville"));
+        assertThat(geographyRowCount()).isEqualTo(geographyRows + 3);
+
+        // Same state and city names under a different country are different places.
+        Map<String, Object> elsewhere = profileService.updateCore(me, location("Otherland", "Northern Province", "Testville")).location();
+        assertThat(geographyRowCount()).isEqualTo(geographyRows + 6);
+        assertThat(((Map<?, ?>) elsewhere.get("city")).get("id")).isNotEqualTo(((Map<?, ?>) created.get("city")).get("id"));
+
+        // Moving country without naming a state/city drops the old ones instead of leaving them under the new country.
+        Map<String, Object> moved = profileService.updateCore(me, location("India", null, null)).location();
+        assertThat(code(moved, "country")).isEqualTo("IN");
+        assertThat(moved.get("state")).isNull();
+        assertThat(moved.get("city")).isNull();
+
+        assertThatThrownBy(() -> profileService.updateCore(me, location("<script>alert(1)</script>", null, null)))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void spiritualCommunityMatchesTheListedNameAndKeepsAnUnlistedOneForReviewWithoutPublishingIt() {
+        AuthenticatedUser me = userWithProfile();
+        AuthenticatedUser other = userWithProfile();
+
+        assertThat(profileService.updateSpiritual(me, spiritual("sadhguru (isha foundation)")).spiritualCommunity())
+                .isEqualTo("Sadhguru (Isha Foundation)");
+        assertThat(spiritualCommunityRows("Sadhguru (Isha Foundation)")).isEqualTo(1);
+
+        assertThat(profileService.updateSpiritual(me, spiritual("  Local   Satsang Group ")).spiritualCommunity())
+                .isEqualTo("Local Satsang Group");
+        // A second user typing it differently reuses the row and the first spelling, instead of adding a duplicate.
+        assertThat(profileService.updateSpiritual(other, spiritual("local satsang group")).spiritualCommunity())
+                .isEqualTo("Local Satsang Group");
+        assertThat(spiritualCommunityRows("Local Satsang Group")).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "select is_active from master_value where name = 'Local Satsang Group'", Boolean.class)).isFalse();
+
+        // Never offered in the shared dropdown until someone promotes it.
+        assertThat(optionsService.options().masterData().get("SPIRITUAL_COMMUNITY"))
+                .extracting(v -> v.name())
+                .contains("Sadhguru (Isha Foundation)", "ISKCON (International Society for Krishna Consciousness)")
+                .doesNotContain("Local Satsang Group");
+
+        assertThat(profileService.updateSpiritual(me, spiritual(null)).spiritualCommunity()).isNull();
+    }
+
+    @Test
+    void optionsListEverythingTheClientNeedsInOneCallExceptGeography() {
+        OptionsResponse options = optionsService.options();
+
+        assertThat(options.enums().get("otpPurposes"))
+                .containsExactly("REGISTER", "LOGIN", "FORGOT_PASSWORD", "CHANGE_EMAIL", "CHANGE_MOBILE");
+        assertThat(options.enums()).containsKeys("devicePlatforms", "photoTypes", "photoVisibilities");
+        assertThat(options.masterData()).containsKeys("DIET", "INTEREST", "HOBBY", "LANGUAGE", "SPIRITUAL_COMMUNITY");
+        assertThat(options.masterData()).doesNotContainKeys("COUNTRY", "STATE", "CITY");
+        assertThat(options.customValueCategories()).containsExactly("SPIRITUAL_COMMUNITY");
+    }
+
+    private UpdateCareerRequest career(String linkedinUrl) {
+        return new UpdateCareerRequest(null, "Engineer", "Acme", null, null, null, null, true, linkedinUrl);
+    }
+
+    private UpdateProfileRequest location(String country, String state, String city) {
+        return new UpdateProfileRequest(null, null, null, null, null, null, null, null, null, null, country, state, city);
+    }
+
+    private UpdateSpiritualProfileRequest spiritual(String community) {
+        return new UpdateSpiritualProfileRequest(community, null, null, null, null);
+    }
+
+    private String code(Map<String, Object> location, String level) {
+        return (String) ((Map<?, ?>) location.get(level)).get("code");
+    }
+
+    private long geographyRowCount() {
+        return jdbcTemplate.queryForObject(
+                "select count(*) from master_value mv join master_category mc on mc.id = mv.category_id "
+                        + "where mc.code in ('COUNTRY', 'STATE', 'CITY')", Long.class);
+    }
+
+    private long spiritualCommunityRows(String name) {
+        return jdbcTemplate.queryForObject(
+                "select count(*) from master_value mv join master_category mc on mc.id = mv.category_id "
+                        + "where mc.code = 'SPIRITUAL_COMMUNITY' and mv.name = ?", Long.class, name);
+    }
+
     private UUID insertMedia(AuthenticatedUser owner, String status) {
         UUID mediaUuid = UUID.randomUUID();
         Long ownerId = jdbcTemplate.queryForObject("select id from \"user\" where uuid = ?", Long.class, owner.uuid());
@@ -385,7 +535,7 @@ abstract class AbstractPersistenceTests {
     private AuthenticatedUser userWithProfile() {
         AuthenticatedUser me = principalFor(newUser());
         profileService.updateCore(me, new UpdateProfileRequest(
-                "Asha", null, null, LocalDate.now().minusYears(30), "FEMALE", null, null, null, null, null));
+                "Asha", null, null, LocalDate.now().minusYears(30), "FEMALE", null, null, null, null, null, null, null, null));
         return me;
     }
 
@@ -414,7 +564,7 @@ abstract class AbstractPersistenceTests {
     private AuthenticatedUser discoverableUser(String gender, int age, String modeCode) {
         AuthenticatedUser me = principalFor(newUser());
         profileService.updateCore(me, new UpdateProfileRequest(
-                "Test", null, null, LocalDate.now().minusYears(age), gender, null, null, null, null, null));
+                "Test", null, null, LocalDate.now().minusYears(age), gender, null, null, null, null, null, null, null, null));
         activateProfile(me);
         assignRelationshipMode(me, modeCode);
         return me;

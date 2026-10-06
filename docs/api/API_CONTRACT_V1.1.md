@@ -15,7 +15,7 @@
 
 ## 2. Endpoint inventory
 ### Authentication
-- `POST /auth/register` — Register a new account
+- `POST /auth/register` — Register a new account (optional `referralCode`; there is no `inviteCode`)
 - `POST /auth/verify-otp` — Verify an OTP
 - `POST /auth/resend-otp` — Resend an OTP
 - `POST /auth/verify-email` — Verify email address
@@ -315,3 +315,10 @@ Spiritual discovery fields are optional and text-based: `spiritualCommunity`, `s
   "dreamSpiritualPilgrimageDestination": "Kailash"
 }
 ```
+
+## 9. Changes since v1.1 (agreed with the frontend, in the live API)
+- **`GET /meta/options`** (public, cacheable): every fixed enum (`otpPurposes`, `devicePlatforms`, `photoTypes`, `photoVisibilities`) and every admin-managed master-data list in one response. Country/state/city are not in it.
+- **Location by name**: `PUT /me/profile` accepts `country`, `state`, `city` as plain strings in addition to `countryId`/`stateId`/`cityId`. A name wins over an id; the API resolves it to a master-data row, creating it on first use under its parent (a state under its country, a city under its state). Matching is case-insensitive but not spelling-insensitive, so the frontend should take its strings from one consistent source. `PUT /me/profile/career` likewise accepts `workLocationCity`.
+- **`referralCode`** on register is stored (upper-cased); `inviteCode` was removed.
+- **`linkedinUrl`** on `PUT /me/profile/career`: normalised to a clean `https://…linkedin.com/in/<handle>` URL and returned only to the profile owner, never in another user's view of the profile.
+- **Spiritual community** is a list (`masterData.SPIRITUAL_COMMUNITY`). `spiritualCommunity` is still sent as a string: a listed name resolves to its canonical spelling; anything else is accepted, kept as typed, and held for review without appearing in other users' dropdown.

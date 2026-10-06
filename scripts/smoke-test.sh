@@ -31,14 +31,14 @@ PASS=0
 FAIL=0
 FAILED_ROUTES=()
 
+# check METHOD ROUTE EXPECTED_STATUSES [AUTH_HEADER] [JSON_BODY]
 check() {
-  local method=$1 route=$2 expected=$3 auth_header=${4:-}
+  local method=$1 route=$2 expected=$3 auth_header=${4:-} body=${5:-}
   local http_status
-  if [ -n "$auth_header" ]; then
-    http_status=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" -H "$auth_header" "$BASE_URL$route")
-  else
-    http_status=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" "$BASE_URL$route")
-  fi
+  local args=(-s -o /dev/null -w "%{http_code}" -X "$method")
+  [ -n "$auth_header" ] && args+=(-H "$auth_header")
+  [ -n "$body" ] && args+=(-H "Content-Type: application/json" -d "$body")
+  http_status=$(curl "${args[@]}" "$BASE_URL$route")
   if [[ ",$expected," == *",$http_status,"* ]]; then
     PASS=$((PASS + 1))
     printf "  \033[32mOK\033[0m   %-6s %-55s -> %s\n" "$method" "$route" "$http_status"
@@ -63,6 +63,7 @@ check GET /api/v1/reports/reasons 200
 check GET /api/v1/safety-center 200
 check GET /api/v1/help 200
 check GET /api/v1/plans 200
+check GET /api/v1/meta/options 200
 
 echo
 echo "-- Auth boundary (should reject, not error) --"
@@ -76,21 +77,52 @@ if [ -z "${DB_URL:-}" ]; then
   echo
   echo "-- Skipping authenticated endpoints: set DB_URL/DB_USERNAME/DB_PASSWORD to also cover these --"
 else
-  DB_HOST=$(echo "$DB_URL" | sed -E 's#jdbc:postgresql://([^/]+)/.*#\1#')
-  DB_NAME=$(echo "$DB_URL" | sed -E 's#.*/([^?]+)\?.*#\1#')
-  DB_CONN="host=$DB_HOST dbname=$DB_NAME user=$DB_USERNAME sslmode=prefer"
+  # jdbc:postgresql://host[:port]/dbname[?params] -> separate host / port / dbname for psql
+  DB_HOST_PORT=$(echo "$DB_URL" | sed -E 's#jdbc:postgresql://([^/]+)/.*#\1#')
+  DB_HOST=${DB_HOST_PORT%%:*}
+  DB_PORT=5432
+  [[ "$DB_HOST_PORT" == *:* ]] && DB_PORT=${DB_HOST_PORT##*:}
+  DB_NAME=$(echo "$DB_URL" | sed -E 's#.*/([^?]+)(\?.*)?$#\1#')
+  DB_CONN="host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USERNAME sslmode=prefer"
 
+  # Everything the test user can have accumulated, children before parents so the foreign keys allow it. If the
+  # script ever starts writing to a table not listed here the delete fails - loudly, below - rather than
+  # silently leaving test accounts behind in whatever database this was pointed at.
   cleanup() {
-    PGPASSWORD="$DB_PASSWORD" psql "$DB_CONN" -v ON_ERROR_STOP=0 -q <<SQL >/dev/null 2>&1
+    local user_id="(SELECT id FROM \"user\" WHERE email = '$TEST_EMAIL')"
+    local profile_id="(SELECT id FROM user_profile WHERE user_id = $user_id)"
+    PGPASSWORD="$DB_PASSWORD" psql "$DB_CONN" -v ON_ERROR_STOP=1 -q <<SQL >/dev/null 2>/tmp/smoketest_cleanup.err
 BEGIN;
-DELETE FROM login_history WHERE user_id = (SELECT id FROM "user" WHERE email = '$TEST_EMAIL');
-DELETE FROM refresh_token WHERE user_id = (SELECT id FROM "user" WHERE email = '$TEST_EMAIL');
-DELETE FROM otp WHERE user_id = (SELECT id FROM "user" WHERE email = '$TEST_EMAIL');
-DELETE FROM user_role WHERE user_id = (SELECT id FROM "user" WHERE email = '$TEST_EMAIL');
-DELETE FROM user_profile WHERE user_id = (SELECT id FROM "user" WHERE email = '$TEST_EMAIL');
+DELETE FROM profile_education WHERE profile_id = $profile_id;
+DELETE FROM profile_career WHERE profile_id = $profile_id;
+DELETE FROM profile_family WHERE profile_id = $profile_id;
+DELETE FROM profile_lifestyle WHERE profile_id = $profile_id;
+DELETE FROM spiritual_profile WHERE profile_id = $profile_id;
+DELETE FROM profile_language WHERE profile_id = $profile_id;
+DELETE FROM profile_interest WHERE profile_id = $profile_id;
+DELETE FROM profile_hobby WHERE profile_id = $profile_id;
+DELETE FROM profile_verification WHERE profile_id = $profile_id;
+DELETE FROM partner_preference WHERE profile_id = $profile_id;
+DELETE FROM user_relationship_mode WHERE user_id = $user_id;
+DELETE FROM notification_setting WHERE user_id = $user_id;
+DELETE FROM search_history WHERE user_id = $user_id;
+DELETE FROM saved_search WHERE user_id = $user_id;
+DELETE FROM login_history WHERE user_id = $user_id;
+DELETE FROM refresh_token WHERE user_id = $user_id;
+DELETE FROM otp WHERE user_id = $user_id;
+DELETE FROM user_role WHERE user_id = $user_id;
+DELETE FROM user_profile WHERE user_id = $user_id;
 DELETE FROM "user" WHERE email = '$TEST_EMAIL';
 COMMIT;
 SQL
+    local remaining
+    remaining=$(PGPASSWORD="$DB_PASSWORD" psql "$DB_CONN" -tAq -c "SELECT count(*) FROM \"user\" WHERE email = '$TEST_EMAIL'" 2>/dev/null)
+    if [ "${remaining:-1}" != "0" ]; then
+      echo
+      echo "WARNING: could not delete test user $TEST_EMAIL - remove it by hand. psql said:"
+      cat /tmp/smoketest_cleanup.err
+      exit 1
+    fi
   }
   trap cleanup EXIT
 
@@ -98,11 +130,12 @@ SQL
   echo "-- Registering throwaway test user ($TEST_EMAIL) --"
   register_status=$(curl -s -o /tmp/smoketest_register.json -w "%{http_code}" -X POST "$BASE_URL/api/v1/auth/register" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\",\"fullName\":\"Smoke Test\",\"phoneNumber\":\"+91$(date +%s | tail -c 10)\",\"gender\":\"MALE\",\"dateOfBirth\":\"1995-01-01\",\"acceptedTerms\":true,\"acceptedPrivacyPolicy\":true}")
+    -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\",\"referralCode\":\"smoke-test\",\"acceptedTerms\":true,\"acceptedPrivacyPolicy\":true}")
   if [ "$register_status" != "201" ]; then
     echo "  Registration failed (status $register_status) - aborting authenticated checks."
     cat /tmp/smoketest_register.json
     FAIL=$((FAIL + 1))
+    FAILED_ROUTES+=("POST /api/v1/auth/register -> $register_status (expected 201)")
   else
     PGPASSWORD="$DB_PASSWORD" psql "$DB_CONN" -q -c \
       "UPDATE \"user\" SET account_status = 'ACTIVE' WHERE email = '$TEST_EMAIL';" >/dev/null
@@ -115,22 +148,18 @@ SQL
     if [ -z "$JWT" ]; then
       echo "  Login failed - aborting authenticated checks. Response: $login_response"
       FAIL=$((FAIL + 1))
+      FAILED_ROUTES+=("POST /api/v1/auth/login -> no access token")
     else
       AUTH="Authorization: Bearer $JWT"
 
       echo
-      echo "-- Creating a minimal profile (several endpoints legitimately 404 without one) --"
-      profile_put_status=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/api/v1/me/profile" \
-        -H "$AUTH" -H "Content-Type: application/json" \
-        -d '{"firstName":"Smoke","lastName":"Test","displayName":"SmokeTest","dateOfBirth":"1995-01-01","gender":"MALE","headline":"smoke test","aboutMe":"smoke test"}')
-      if [ "$profile_put_status" = "200" ]; then
-        PASS=$((PASS + 1))
-        printf "  \033[32mOK\033[0m   %-6s %-55s -> %s\n" PUT /api/v1/me/profile "$profile_put_status"
-      else
-        FAIL=$((FAIL + 1))
-        FAILED_ROUTES+=("PUT /api/v1/me/profile -> $profile_put_status (expected 200)")
-        printf "  \033[31mFAIL\033[0m %-6s %-55s -> %s (expected 200)\n" PUT /api/v1/me/profile "$profile_put_status"
-      fi
+      echo "-- Writing a profile (several endpoints legitimately 404 without one; also covers location by name) --"
+      check PUT /api/v1/me/profile 200 "$AUTH" \
+        '{"firstName":"Smoke","lastName":"Test","displayName":"SmokeTest","dateOfBirth":"1995-01-01","gender":"MALE","headline":"smoke test","aboutMe":"smoke test","country":"India","state":"Maharashtra","city":"Pune"}'
+      check PUT /api/v1/me/profile/career 200 "$AUTH" \
+        '{"jobTitle":"Engineer","companyName":"Acme","isEmployed":true,"workLocationCity":"Pune","linkedinUrl":"https://www.linkedin.com/in/smoke-test"}'
+      check PUT /api/v1/me/profile/career 400 "$AUTH" '{"linkedinUrl":"https://example.com/not-linkedin"}'
+      check PUT /api/v1/me/profile/spiritual 200 "$AUTH" '{"spiritualCommunity":"Sadhguru (Isha Foundation)"}'
 
       echo
       echo "-- Authenticated endpoints (auth, profile, connections, messaging, subscriptions, etc.) --"
@@ -193,7 +222,7 @@ echo "== Results: $PASS passed, $FAIL failed =="
 if [ "$FAIL" -gt 0 ]; then
   echo
   echo "Failed routes:"
-  for r in "${FAILED_ROUTES[@]}"; do echo "  - $r"; done
+  for r in ${FAILED_ROUTES[@]+"${FAILED_ROUTES[@]}"}; do echo "  - $r"; done
   exit 1
 fi
 exit 0

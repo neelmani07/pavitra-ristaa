@@ -111,6 +111,7 @@ public class AuthService {
         user.setEmail(email);
         user.setMobile(mobile);
         user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setReferralCode(normalizeReferralCode(request.referralCode()));
         user.setAccountStatus(AccountStatus.PENDING_VERIFICATION);
         user.setEmailVerified(false);
         user.setMobileVerified(false);
@@ -128,6 +129,14 @@ public class AuthService {
             otpService.issueNumericOtp(saved, mobile, OtpPurpose.REGISTER);
         }
         return authMapper.toRegisterResponse(saved);
+    }
+
+    /** Trimmed and upper-cased so the same code typed in a different case is counted as one; blank means none. */
+    private static String normalizeReferralCode(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return raw.trim().toUpperCase(java.util.Locale.ROOT);
     }
 
     // noRollbackFor: otpService.consumeNumericOtp()'s attempt-count increment must persist on a wrong code, or the

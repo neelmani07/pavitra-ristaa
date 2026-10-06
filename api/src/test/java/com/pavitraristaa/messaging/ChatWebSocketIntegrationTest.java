@@ -236,7 +236,7 @@ class ChatWebSocketIntegrationTest {
         AuthenticatedUser principal = new AuthenticatedUser(saved.getId(), saved.getUuid(), List.of("USER"), 1L);
 
         profileService.updateCore(principal, new UpdateProfileRequest(
-                "Test", null, null, LocalDate.now().minusYears(age), gender, null, null, null, null, null));
+                "Test", null, null, LocalDate.now().minusYears(age), gender, null, null, null, null, null, null, null, null));
         jdbcTemplate.update(
                 "update user_profile set profile_status = 'ACTIVE' where user_id = (select id from \"user\" where uuid = ?)",
                 principal.uuid());
