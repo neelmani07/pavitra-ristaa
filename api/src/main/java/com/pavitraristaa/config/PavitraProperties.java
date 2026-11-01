@@ -12,6 +12,7 @@ public class PavitraProperties {
     private final Auth auth = new Auth();
     private final Media media = new Media();
     private final Razorpay razorpay = new Razorpay();
+    private final Brevo brevo = new Brevo();
     private final Cors cors = new Cors();
 
     public Media getMedia() {
@@ -28,6 +29,10 @@ public class PavitraProperties {
 
     public Auth getAuth() {
         return auth;
+    }
+
+    public Brevo getBrevo() {
+        return brevo;
     }
 
     public Razorpay getRazorpay() {
@@ -98,6 +103,26 @@ public class PavitraProperties {
         private Duration ttl = Duration.ofMinutes(10);
         private int length = 6;
         private int maxAttempts = 5;
+        /** Minimum gap between two OTPs for the same destination and purpose; requests inside it are dropped. */
+        private Duration resendCooldown = Duration.ofSeconds(60);
+        /** Most OTPs issued to one destination for one purpose in any rolling hour. */
+        private int maxPerHour = 5;
+
+        public Duration getResendCooldown() {
+            return resendCooldown;
+        }
+
+        public void setResendCooldown(Duration resendCooldown) {
+            this.resendCooldown = resendCooldown;
+        }
+
+        public int getMaxPerHour() {
+            return maxPerHour;
+        }
+
+        public void setMaxPerHour(int maxPerHour) {
+            this.maxPerHour = maxPerHour;
+        }
 
         public Duration getTtl() {
             return ttl;
@@ -333,6 +358,46 @@ public class PavitraProperties {
 
         public void setWebhookSecret(String webhookSecret) {
             this.webhookSecret = webhookSecret;
+        }
+    }
+
+    /** Transactional email (OTP codes). Blank apiKey = not configured: emails are only logged, never sent. */
+    public static class Brevo {
+        private String apiKey = "";
+        private String senderEmail = "";
+        private String senderName = "Pavitra Ristaa";
+        private String baseUrl = "https://api.brevo.com";
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public String getSenderEmail() {
+            return senderEmail;
+        }
+
+        public void setSenderEmail(String senderEmail) {
+            this.senderEmail = senderEmail;
+        }
+
+        public String getSenderName() {
+            return senderName;
+        }
+
+        public void setSenderName(String senderName) {
+            this.senderName = senderName;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
         }
     }
 

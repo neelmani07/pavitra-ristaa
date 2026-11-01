@@ -1,6 +1,6 @@
 # OTP delivery provider — decision record
 
-**Status:** Recommendation made; not yet implemented. `LoggingOtpSender` (`api/src/main/java/com/pavitraristaa/auth/service/LoggingOtpSender.java`) still only logs that an OTP was dispatched, so registration/login-by-OTP cannot be completed outside a database-seeded test account.
+**Status:** Email delivery implemented (Brevo, 2026-11-01). SMS delivery (MSG91) not yet implemented. `LoggingOtpSender` (`api/src/main/java/com/pavitraristaa/auth/service/LoggingOtpSender.java`) still only logs that an OTP was dispatched, so registration/login-by-OTP cannot be completed outside a database-seeded test account.
 
 ## Recommendation
 
@@ -36,3 +36,13 @@ DLT template/sender approval commonly takes **3–10 business days**, sometimes 
 - Confirmation this recommendation is accepted, or a different provider if you have an existing relationship (e.g. an aggregator your org already uses).
 
 Until then, local/dev accounts must keep being created directly in the database (see the smoke-test pattern used in this session) rather than through `/auth/register`.
+
+## Update 2026-11-01: email OTPs go out through Brevo
+
+- **What it does:** with `BREVO_API_KEY` and `BREVO_SENDER_EMAIL` set, every OTP and password-reset code addressed to an email is sent as a transactional email (`POST https://api.brevo.com/v3/smtp/email`, `api-key` header). Mobile numbers still only log ("OTP dispatched") until MSG91 is added; `OtpSenderConfig` is the single place to plug it in.
+- **Not configured = logged, not sent.** A blank `BREVO_API_KEY` keeps today's behaviour, which is what every environment and every test uses. An API key without a sender address stops the app at startup on purpose.
+- **To switch it on (Render):** in Brevo create an API key (SMTP & API > API Keys), add the sender address under Senders, Domains & Dedicated IPs and verify it, ideally authenticating the whole domain (SPF/DKIM) or mail lands in spam. Then set `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` and optionally `BREVO_SENDER_NAME` on the service and redeploy. Check the logs for `Brevo rejected` / `Could not reach Brevo` after the first registration.
+- **A failed send never fails the request.** It is logged at ERROR (masked address, never the code) and the user can ask for a new one. The consequence is that a wrong key surfaces in the logs, not to the user.
+- **Sent after the database commit,** not inside the transaction: a registration that rolls back never emails a code, and the HTTP call does not hold a database connection.
+- **Throttled:** at most one OTP per destination and purpose every 60 seconds, and 5 per rolling hour (`pavitra.otp.resend-cooldown`, `pavitra.otp.max-per-hour`). A request over the limit is dropped silently and answered with the usual "sent if valid" success, so it cannot be used to discover which addresses have accounts. This also protects the Brevo daily quota (free plan: about 300 emails a day per third-party sources; confirm on Brevo's own pricing page) from being used up by someone hammering resend.
+- **Password reset email** contains the recovery token itself, since there is no frontend reset-page URL configured yet. Adding `pavitra.frontend-base-url` and sending a link is the natural next step once the FE has the page.

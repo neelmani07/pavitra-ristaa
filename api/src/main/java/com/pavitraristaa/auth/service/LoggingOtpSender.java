@@ -3,9 +3,8 @@ package com.pavitraristaa.auth.service;
 import com.pavitraristaa.auth.entity.OtpPurpose;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
-@Component
+/** Stand-in for a channel with no real provider configured yet: records that an OTP went out, never its value. */
 public class LoggingOtpSender implements OtpSender {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingOtpSender.class);

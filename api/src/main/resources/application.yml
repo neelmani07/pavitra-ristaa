@@ -63,6 +63,8 @@ pavitra:
     ttl: PT10M
     length: 6
     max-attempts: 5
+    resend-cooldown: PT60S
+    max-per-hour: 5
   auth:
     max-failed-logins: 5
     lock-duration: PT15M
@@ -78,6 +80,11 @@ pavitra:
     key-id: ${RAZORPAY_KEY_ID:}
     key-secret: ${RAZORPAY_KEY_SECRET:}
     webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
+  brevo:
+    # Blank api-key (the default everywhere until set) means OTP emails are logged, not sent - see OtpSenderConfig.
+    api-key: ${BREVO_API_KEY:}
+    sender-email: ${BREVO_SENDER_EMAIL:}
+    sender-name: ${BREVO_SENDER_NAME:Pavitra Ristaa}
   cors:
     # Comma-separated list of exact origins a browser frontend is served from - no wildcard, since JWTs are
     # sent as a bearer header rather than a cookie but the allowlist should still stay explicit. Add the

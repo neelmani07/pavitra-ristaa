@@ -31,6 +31,7 @@ import com.pavitraristaa.admin.service.AdminUserService;
 import com.pavitraristaa.admin.service.AdminVerificationService;
 import com.pavitraristaa.admin.service.AuditLogService;
 import com.pavitraristaa.auth.dto.RegisterRequest;
+import com.pavitraristaa.auth.dto.ResendOtpRequest;
 import com.pavitraristaa.auth.service.AuthService;
 import com.pavitraristaa.auth.entity.AccountStatus;
 import com.pavitraristaa.auth.entity.UserAccount;
@@ -370,6 +371,45 @@ abstract class AbstractPersistenceTests {
                 "select referral_code from \"user\" where email = ?", String.class, withCode)).isEqualTo("FRIEND-42");
         assertThat(jdbcTemplate.queryForObject(
                 "select referral_code from \"user\" where email = ?", String.class, withBlank)).isNull();
+    }
+
+    @Test
+    void resendingAnOtpIsThrottledByCooldownAndByAnHourlyCapWithoutRevealingAnything() {
+        String email = "otp-" + UUID.randomUUID() + "@example.test";
+        authService.register(new RegisterRequest(email, null, "password1", null, true, true));
+        ResendOtpRequest resend = new ResendOtpRequest(email, "REGISTER");
+        assertThat(otpRows(email)).isEqualTo(1);
+
+        // Inside the 60-second cooldown: answered normally, but nothing new is issued.
+        authService.resendOtp(resend);
+        authService.resendOtp(resend);
+        assertThat(otpRows(email)).isEqualTo(1);
+
+        // Once the cooldown has passed a resend issues a new code, up to 5 in an hour.
+        for (int expected = 2; expected <= 5; expected++) {
+            ageOtps(email);
+            authService.resendOtp(resend);
+            assertThat(otpRows(email)).isEqualTo(expected);
+        }
+        ageOtps(email);
+        authService.resendOtp(resend);
+        assertThat(otpRows(email)).as("hourly cap reached").isEqualTo(5);
+
+        // The limit is per destination and purpose: another purpose for the same address is unaffected.
+        authService.resendOtp(new ResendOtpRequest(email, "LOGIN"));
+        assertThat(otpRows(email)).isEqualTo(6);
+
+        // An address with no account gets the same silent success and no row, so the limit tells nothing.
+        authService.resendOtp(new ResendOtpRequest("nobody-" + UUID.randomUUID() + "@example.test", "REGISTER"));
+    }
+
+    private long otpRows(String destination) {
+        return jdbcTemplate.queryForObject("select count(*) from otp where destination = ?", Long.class, destination);
+    }
+
+    /** Moves every OTP for the destination 10 minutes into the past: past the cooldown, still inside the hour. */
+    private void ageOtps(String destination) {
+        jdbcTemplate.update("update otp set created_at = created_at - interval '10 minutes' where destination = ?", destination);
     }
 
     @Test
